@@ -35,6 +35,7 @@ internal static class SelfTests
     public static async Task RunAsync()
     {
         await CloudSelfTests.RunAsync();
+        await DiscoverySelfTests.RunAsync();
         Assert(CredentialStore.IsPrivate("192.168.7.1")&&!CredentialStore.IsPrivate("8.8.8.8")&&!CredentialStore.IsPrivate("127.0.0.1"),"Local address boundary failed.");
         var login=RouterClient.LoginBody("a+b@example.com","P@ss word!é","abcxyz123_windows_test",123456);
         var expected=Convert.ToBase64String(Encoding.UTF8.GetBytes("a%2Bb%40example.com:P%40ss%20word!%C3%A9"));
@@ -45,7 +46,7 @@ internal static class SelfTests
         var rows=Catalog.Flatten(secret,"FIXTURE");Assert(rows.Any(r=>r.Value=="fixture network") && rows.All(r=>!r.Value.Contains("fixture-secret")&&!r.Value.Contains("fixture-token")),"Secret branch redaction failed.");
         var mode=Settings.Definitions.Single(d=>d.Container=="DEVICEOPERMODE");
         var bridge=Settings.Prepare(mode,"DEVICEOPERMODE",new JsonObject{["MODE"]="DUAL"},new(){["MODE"]="BRIDGE"});
-        Assert(bridge.Preview.Contains("unreachable") && bridge.Preview.Contains("not been verified"),"Bridge enable warning missing.");
+        Assert(bridge.Preview.Contains("unreachable") && bridge.Preview.Contains("has not been verified"),"Bridge enable warning missing.");
         foreach(var body in new[]{"{\"REQUEST\":{\"OPERTYPE\":\"MODIFY\",\"DEVICEOPERMODE\":{\"MODE\":\"UNKNOWN\"}}}","{\"REQUEST\":{\"OPERTYPE\":\"MODIFY\",\"UPDATE\":{\"CHECKNOW\":\"CheckNowDownloadInstall\"}}}","{\"REQUEST\":{\"OPERTYPE\":\"MODIFY\",\"NETWORKMISC\":{\"ADMIN_PASSWORD\":\"x\"}}}"})
             Refuses(()=>Settings.ValidateEnvelope(body),"Unexpected modifying payload accepted.");
         var definition=Settings.Definitions.Single(d=>d.Container=="NETWORKDNS");var wire=new FakeWire();var baseline=wire.State["NETWORKDNS_ALL"]["NETWORKDNS"]!.AsObject();

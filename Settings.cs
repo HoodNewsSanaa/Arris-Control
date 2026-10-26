@@ -177,7 +177,7 @@ internal static class Settings
         }
         if(container=="STATICIP" && operation=="ADD")payload["ENABLE"]="1";
         if(container=="DEVICEOPERMODE" && Catalog.Text(payload["MODE"]) is not ("DUAL" or "IPV4ONLY" or "BRIDGE"))throw new RouterException("Unrecognized routing mode.");
-        if(container=="DEVICEOPERMODE" && Catalog.Text(payload["MODE"])=="BRIDGE")changes.Add("WARNING: Enabling bypass may disconnect this app and make the router unreachable. Turning bypass off requires management access. Access and recovery in bridge mode have not been verified; a physical reset may be needed.");
+        if(container=="DEVICEOPERMODE" && Catalog.Text(payload["MODE"])=="BRIDGE")changes.Add("WARNING: Enabling bypass may disconnect this app and make the router unreachable. Turning bypass off requires management access. Automatic reconnection is not guaranteed. Turning bypass off after reconnecting has not been verified; a physical reset may be needed.");
         if(operation=="DELETE")
         {
             if(identity.Length==0)throw new RouterException("The router did not provide a rule identifier; removal is unavailable.");

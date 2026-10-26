@@ -85,8 +85,9 @@ Enabling bypass requires confirmation of a warning about losing management
 access and potentially needing a physical reset. Unknown modes disable both buttons.
 The off button restores IPv4/IPv6 router mode only after a reviewed save and
 only if the local API is reachable. This is not a verified recovery method:
-local reachability/login while bridged and WAN-disconnected operation have
-not been established.
+local reachability/login while bridged was confirmed in one user test after
+an address change, but turning bypass off and WAN-disconnected operation remain
+unverified.
 
 The earlier Windows client verified local login and protected configuration
 reads on a W30-family mAX. Native protocol, payload, stale-update, privacy,
@@ -141,3 +142,21 @@ version for subsequent releases. Workflow actions are pinned to commit hashes.
 This is an independent project, not an ARRIS/SURFboard product. Protocol
 mapping was derived from behavior and static API models; APKs, vendor firmware,
 user identifiers, credentials, and diagnostic responses are not redistributed.
+
+## Automatic local address discovery
+
+On connection and refresh, the app checks the saved address against the selected
+router certificate. If unavailable, it searches private IPv4 addresses on connected
+Wi-Fi/Ethernet networks at port 50011 (32 probes at a time, up to 1024 addresses;
+large subnets are limited to the local /24). This sends TLS probes without credentials.
+Only a unique matching certificate is eligible for login. An authenticated exact
+serial and protected mode read are then required before selecting and saving the
+new address. Certificate CN matching is a consistency check, not public-PKI proof.
+
+A new encrypted profile version retains the existing encrypted payload; older
+profiles are preserved. No cloud fallback or router setting writes are used for
+discovery. Discovery is automatic when a read reconnects after a mode/address
+change; settings writes are never retried. Private IPv4 networks reachable through
+connected Wi-Fi/Ethernet are supported. Other subnets, isolated clients, changing
+addresses during discovery, and unreachable management listeners may prevent it.
+Native live automatic reconnection still needs user validation.

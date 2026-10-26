@@ -138,6 +138,20 @@ internal static class CredentialStore
         var destination=Path.Combine(UserDirectory,$"loaded-{record.Serial}-{record.Mac}-{hash}.json");
         if(!File.Exists(destination))File.Copy(record.Path,destination,false);
     }
+    internal static CredentialRecord SaveVerifiedAddress(CredentialRecord original,string address,string? directory=null)
+    {
+        if(!IsPrivate(address))throw new RouterException("A private router address is required.");
+        var verified=Inspect(original.Path);
+        if(verified.Serial!=original.Serial || verified.Mac!=original.Mac || verified.Address!=original.Address)throw new RouterException("Credential metadata changed during discovery.");
+        var root=JsonNode.Parse(File.ReadAllText(original.Path))!.AsObject();
+        root["RouterAddress"]=address;root["CreatedAtUTC"]=DateTimeOffset.UtcNow.ToString("o");root["LocalAuthenticationVerified"]=true;
+        root["AddressVerification"]="Local certificate, authenticated exact serial and protected mode read";
+        var folder=directory??UserDirectory;Directory.CreateDirectory(folder);
+        var target=Path.Combine(folder,$"{original.Serial}-{DateTime.UtcNow:yyyyMMddTHHmmssfffffffZ}-{Guid.NewGuid():N}.json");
+        var temporary=target+".tmp";
+        try{File.WriteAllText(temporary,root.ToJsonString(new JsonSerializerOptions{WriteIndented=true}));File.Move(temporary,target);return Inspect(target);}
+        finally{if(File.Exists(temporary))File.Delete(temporary);}
+    }
     public static CredentialRecord SaveVerified(RouterCredential credential,CloudDevice device,string address,string? directory=null)
     {
         if(!IsPrivate(address) || !Regex.IsMatch(device.Serial,"^[A-Z0-9]{12,24}$") || !Regex.IsMatch(device.Mac,"^[A-F0-9]{12}$"))throw new RouterException("Invalid target identity for credential storage.");
@@ -210,8 +224,10 @@ internal sealed class LocalWire : IRouterWire
 
 internal sealed class RouterClient : IDisposable
 {
-    readonly CredentialRecord record;readonly IRouterWire wire;bool authenticated;
-    public RouterClient(CredentialRecord r,IRouterWire? testWire=null){record=r;wire=testWire??new LocalWire(r);authenticated=testWire is not null;}
+    CredentialRecord record;IRouterWire wire;bool authenticated;readonly bool testTransport;
+    public CredentialRecord Record=>record;
+    public Action<string>? Progress {get;set;}
+    public RouterClient(CredentialRecord r,IRouterWire? testWire=null){record=r;wire=testWire??new LocalWire(r);authenticated=testWire is not null;testTransport=testWire is not null;}
     static string EncodeAndroid(string s)
     {
         const string safe="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-!.~'()*";
@@ -229,10 +245,25 @@ internal sealed class RouterClient : IDisposable
     }
     public async Task ConnectAsync(CancellationToken token=default)
     {
+        if(testTransport && authenticated)return;
+        Progress?.Invoke("Locating the selected router on local networks…");
+        var address=await RouterDiscovery.ResolveAsync(record,token);
+        if(address!=record.Address)authenticated=false;
         if(authenticated)return;
-        var credential=CredentialStore.Load(record);
+        wire.Dispose();wire=new LocalWire(record with{Address=address});
+        var previous=CredentialStore.Inspect(record.Path);
+        if(previous.Serial!=record.Serial || previous.Mac!=record.Mac)throw new RouterException("Credential identity changed during discovery.");
+        // The encrypted record still contains its old address until serial/mode verification succeeds.
+        var credential=CredentialStore.Load(previous);
+        Progress?.Invoke("Verifying local router identity at "+address+"…");
         await wire.SendAsync("/loginAction",LoginBody(credential.UserName,credential.Password,"abcxyz123_windows_"+Guid.NewGuid().ToString("N"),DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()),token);
         await VerifyIdentityAsync(token);_ = await ReadAsync("DEVICEOPERMODE_ALL",token);authenticated=true;
+        record=record with{Address=address};
+        if(address!=previous.Address)
+        {
+            try{record=CredentialStore.SaveVerifiedAddress(previous,address);}
+            catch(Exception ex) when(ex is IOException or UnauthorizedAccessException){Progress?.Invoke("Connected at "+address+"; the updated profile could not be saved.");}
+        }
     }
     internal async Task VerifyIdentityAsync(CancellationToken token=default)
     {

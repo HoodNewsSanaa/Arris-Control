@@ -20,3 +20,4 @@ decompiled/
 source-review/
 *.tar.gz
 *.tgz
+discovery-test-*/

@@ -80,7 +80,7 @@ internal sealed class MainWindow : Window
     {
         if(testMode || busy || changingSelection || routerPicker.SelectedItem is not CredentialRecord r)return;
         if(!DiscardEdits()){changingSelection=true;routerPicker.SelectedItem=activeRecord;changingSelection=false;return;}
-        dirty=false;activeRecord=r;client?.Dispose();client=new RouterClient(r);snapshots.Clear();await RefreshAsync();
+        dirty=false;activeRecord=r;client?.Dispose();client=new RouterClient(r){Progress=message=>status.Text=message};snapshots.Clear();await RefreshAsync();
     }
     void SetBusy(bool value)
     {
@@ -98,7 +98,10 @@ internal sealed class MainWindow : Window
         try
         {
             var result=await client.ReadPageAsync(page,cancellation.Token);current=result;snapshots[page.Id]=result;dirty=false;Render(result);
-            var ok=result.Reads.Count(r=>r.Readable);status.Text=$"Local read complete · {ok}/{result.Reads.Count} queries · {result.Time:HH:mm:ss} · Cloud requests: 0";
+            activeRecord=client.Record;changingSelection=true;
+            try{var profiles=CredentialStore.Find().Where(r=>r.Serial!=activeRecord.Serial || r.Mac!=activeRecord.Mac).ToList();profiles.Insert(0,activeRecord);routerPicker.ItemsSource=profiles;routerPicker.SelectedItem=activeRecord;}
+            finally{changingSelection=false;}
+            var ok=result.Reads.Count(r=>r.Readable);status.Text=$"Local read complete · {activeRecord.Address} · {ok}/{result.Reads.Count} queries · {result.Time:HH:mm:ss} · Cloud requests: 0";
             if(result.Reads.Any(r=>r.Status=="SessionTimeout"))status.Text+=" · Session expired; refresh to reconnect.";
         }
         catch(Exception ex){status.Text=FriendlyError(ex);}
@@ -197,7 +200,7 @@ internal sealed class MainWindow : Window
         JsonObject? modeData=null;if(snapshot.Data.TryGetValue("DEVICEOPERMODE_ALL",out var data))modeData=data["DEVICEOPERMODE"] as JsonObject;
         var mode=Catalog.Text(modeData?["MODE"]);var known=mode is "DUAL" or "IPV4ONLY" or "BRIDGE";
         var state=Theme.Text(mode=="BRIDGE"?"On · Routing is bypassed":known?"Off · Router mode is active":"Unknown · Refresh to read the router",17);state.Margin=new Thickness(0,10,0,7);box.Children.Add(state);
-        box.Children.Add(Theme.Text("Bypass mode changes the router's routing functions. Management access and recovery after enabling it have not been verified.",13,Theme.Muted));
+        box.Children.Add(Theme.Text("Bypass mode changes the router's routing functions and may change its IP address. The app searches for the router automatically; successful recovery is not guaranteed.",13,Theme.Muted));
         var buttons=new StackPanel{Orientation=Orientation.Horizontal,Margin=new Thickness(0,14,0,0)};
         var off=Theme.Button("Turn bypass OFF",async(_,_)=>
         {

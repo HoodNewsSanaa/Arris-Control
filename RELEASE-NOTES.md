@@ -1,12 +1,15 @@
-Enables the Bypass ON/OFF controls on Overview and Internet/DNS and adds bridge
-mode to the routing selector. Enabling requires an explicit warning confirmation,
-with No selected by default. The app checks the target serial and current setting
-before sending one update, and does not automatically retry interrupted saves.
+Automatically locates the selected router when its saved IP stops matching or
+responding, including address changes after enabling bypass. Checks the saved
+address first, then performs bounded local Wi-Fi/Ethernet discovery on port 50011.
+Only a unique matching certificate is eligible for login; authenticated exact
+serial and protected mode reads are required before selecting the new address.
 
-Enabling bypass may make management unreachable. Turning it off requires a
-reachable authenticated API; bridge-mode access and recovery remain unverified.
-A physical reset may be needed. No live router mode changes were made for testing.
+Retains the updated address in a new encrypted credential profile, preserves old
+versions, and updates the router selector/status. No cloud requests or router
+settings writes are used for discovery. Interrupted settings writes are not retried.
 
-Offline tests cover simulated bridge enable/disable and read-back, unknown-mode
-rejection, and ON/OFF availability in router, bridge, and unknown states. Existing
-credential acquisition, encrypted history, Full settings, and updater are retained.
+Offline checks cover saved-address selection, moved addresses, subnet bounds,
+public-address exclusion, ambiguous/missing matches, cancellation, and encrypted
+payload preservation. Existing protocol, credential, settings, WPF and updater
+checks remain. No live router settings were changed for this release. Native
+live automatic reconnection and bridge-to-router recovery still need validation.
