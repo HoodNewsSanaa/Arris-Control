@@ -80,8 +80,9 @@ reported as unknown and is never automatically retried. Secret values are
 hidden in previews and the field browser; new Wi-Fi passwords use masked inputs.
 
 **Bypass (bridge) mode** is shown on Overview and Internet/DNS, with its current
-status and a dedicated **Turn bypass OFF** button. Enabling bridge remains
-blocked in both the UI and request validator under the existing user constraint.
+status and dedicated **Turn bypass ON** and **Turn bypass OFF** buttons.
+Enabling bypass requires confirmation of a warning about losing management
+access and potentially needing a physical reset. Unknown modes disable both buttons.
 The off button restores IPv4/IPv6 router mode only after a reviewed save and
 only if the local API is reachable. This is not a verified recovery method:
 local reachability/login while bridged and WAN-disconnected operation have

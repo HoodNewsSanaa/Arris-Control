@@ -30,8 +30,8 @@ internal static class Program
                     var encoder=new System.Windows.Media.Imaging.PngBitmapEncoder();encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(image));
                     using var file=File.Create(args[index+1]);encoder.Save(file);
                 }
-                window.LoadFixture("BRIDGE");window.VerifyFixture();new AcquireWindow().VerifyLayout();
-                Console.WriteLine("PASS: native WPF settings, Full settings, bypass status/off-only controls, and credential acquisition layout. No network or real credentials.");return 0;
+                window.LoadFixture("BRIDGE");window.VerifyFixture();window.LoadFixture("IPV4ONLY");window.VerifyFixture();window.LoadFixture("UNKNOWN");window.VerifyFixture();new AcquireWindow().VerifyLayout();
+                Console.WriteLine("PASS: native WPF settings, Full settings, bypass ON/OFF/unknown-state controls, and credential acquisition layout. No network or real credentials.");return 0;
             }
             return app.Run(new MainWindow());
         }

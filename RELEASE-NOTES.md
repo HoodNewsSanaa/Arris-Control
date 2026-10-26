@@ -1,21 +1,12 @@
-Adds a dedicated Bypass (bridge) mode panel on Overview and Internet/DNS, with
-status and a reviewed Turn bypass OFF action. Enabling remains blocked under
-the existing recovery restriction; bridge-mode access/recovery is not verified.
+Enables the Bypass ON/OFF controls on Overview and Internet/DNS and adds bridge
+mode to the routing selector. Enabling requires an explicit warning confirmation,
+with No selected by default. The app checks the target serial and current setting
+before sending one update, and does not automatically retry interrupted saves.
 
-Adds native credential acquisition: SRP cloud sign-in, existing SSO retrieval,
-account inventory selection, local login and exact serial verification, then
-Windows DPAPI-protected storage. Static APK/XAPK protocol reading requires no
-Android installation/execution and embeds no vendor client secret in the app.
+Enabling bypass may make management unreachable. Turning it off requires a
+reachable authenticated API; bridge-mode access and recovery remain unverified.
+A physical reset may be needed. No live router mode changes were made for testing.
 
-Adds a Credentials menu, retained credential history, Open credentials folder,
-and protected saved acquisitions that can be reloaded without cloud sign-in.
-Imported, acquired, and loaded router credentials are retained in versioned
-encrypted files under LocalAppData. Cloud-account passwords/tokens are not saved.
-
-Keeps the friendly settings forms, Full settings browser, and built-in updater.
-No live router changes or real cloud-account logins were used to test this
-release. Native acquisition/saves and the complete updater cycle need live
-validation. Offline tests cover SRP vectors, SSO decryption, account/inventory
-handling, APK/XAPK parsing, device mismatch rejection, settings/write guards,
-WPF layout, update policy, and atomic replacement. Windows persistence fixtures
-report a skip if the test profile cannot use DPAPI.
+Offline tests cover simulated bridge enable/disable and read-back, unknown-mode
+rejection, and ON/OFF availability in router, bridge, and unknown states. Existing
+credential acquisition, encrypted history, Full settings, and updater are retained.

@@ -205,7 +205,14 @@ internal sealed class MainWindow : Window
             var section=new SettingSection(definition,"DEVICEOPERMODE",0,"",Settings.Filter(definition,modeData),"Bypass mode");
             await SaveSectionAsync(section,new Dictionary<string,Func<string>>{["MODE"]=()=>"DUAL"},"MODIFY");
         },true);off.IsEnabled=mode=="BRIDGE";off.ToolTip="Restore router mode with IPv4 and IPv6; a review appears before anything is sent.";
-        var on=new Button{Content="Enable bypass (blocked)",IsEnabled=false,ToolTip="Enabling bridge mode remains blocked under your earlier recovery restriction."};bypassOff=off;bypassOn=on;buttons.Children.Add(off);buttons.Children.Add(on);box.Children.Add(buttons);return Theme.Card(box);
+        var on=Theme.Button("Turn bypass ON",async(_,_)=>
+        {
+            if(modeData is null || mode is not ("DUAL" or "IPV4ONLY"))return;
+            var definition=Settings.Definitions.Single(d=>d.Container=="DEVICEOPERMODE");
+            var section=new SettingSection(definition,"DEVICEOPERMODE",0,"",Settings.Filter(definition,modeData),"Bypass mode");
+            await SaveSectionAsync(section,new Dictionary<string,Func<string>>{["MODE"]=()=>"BRIDGE"},"MODIFY");
+        });on.IsEnabled=mode is "DUAL" or "IPV4ONLY";on.ToolTip="Review the loss-of-access warning before enabling bypass. Recovery has not been verified.";
+        bypassOff=off;bypassOn=on;buttons.Children.Add(off);buttons.Children.Add(on);box.Children.Add(buttons);return Theme.Card(box);
     }
     void RenderTopology(Snapshot snapshot)
     {
@@ -270,7 +277,8 @@ internal sealed class MainWindow : Window
         {
             var edits=operation=="DELETE"?new Dictionary<string,string>():getters.ToDictionary(kv=>kv.Key,kv=>kv.Value());
             var plan=await client.PrepareAsync(section,edits,operation,cancellation.Token);
-            if(MessageBox.Show(this,plan.Preview+"\n\nApply this change to the selected router?","Review settings change",MessageBoxButton.YesNo,MessageBoxImage.Question,MessageBoxResult.No)!=MessageBoxResult.Yes){status.Text="Save cancelled; no update was sent.";return;}
+            var enablingBypass=plan.Container=="DEVICEOPERMODE" && Catalog.Text(plan.Expected["MODE"])=="BRIDGE";
+            if(MessageBox.Show(this,plan.Preview+"\n\nApply this change to the selected router?",enablingBypass?"Enable bypass: management access may be lost":"Review settings change",MessageBoxButton.YesNo,enablingBypass?MessageBoxImage.Warning:MessageBoxImage.Question,MessageBoxResult.No)!=MessageBoxResult.Yes){status.Text="Save cancelled; no update was sent.";return;}
             status.Text="Saving the reviewed change…";var message=await client.ApplyAsync(plan,cancellation.Token);dirty=false;status.Text=message;
             MessageBox.Show(this,message,"Save result",MessageBoxButton.OK,MessageBoxImage.Information);
         }
@@ -311,5 +319,5 @@ internal sealed class MainWindow : Window
         data["DEVICEOPERMODE_ALL"]["DEVICEOPERMODE"]!["MODE"]=mode;
         current=new(page,data,[new("NETWORKDNS_ALL",200,"OK",DateTimeOffset.Now,true)],data.SelectMany(kv=>Catalog.Flatten(kv.Value,kv.Key)).ToList(),DateTimeOffset.Now);snapshots[page.Id]=current;Render(current);
     }
-    public void VerifyFixture(){if(content.Children.Count<2 || fullGrid.Items.Count<5 || tabs.Items.Count!=2 || bypassOn?.IsEnabled!=false || bypassOff?.IsEnabled!=(Catalog.Text(current!.Data["DEVICEOPERMODE_ALL"]["DEVICEOPERMODE"]?["MODE"])=="BRIDGE"))throw new InvalidOperationException("Native UI/bypass binding failed.");}
+    public void VerifyFixture(){var mode=Catalog.Text(current!.Data["DEVICEOPERMODE_ALL"]["DEVICEOPERMODE"]?["MODE"]);if(content.Children.Count<2 || fullGrid.Items.Count<5 || tabs.Items.Count!=2 || bypassOn?.IsEnabled!=(mode is "DUAL" or "IPV4ONLY") || bypassOff?.IsEnabled!=(mode=="BRIDGE"))throw new InvalidOperationException("Native UI/bypass binding failed.");}
 }

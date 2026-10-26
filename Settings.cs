@@ -26,7 +26,7 @@ internal static class Settings
             Text("DNSIPV6SERVERS","IPv6 DNS servers","dns6")],false,"DNS changes affect how devices resolve Internet names.",["IPV4ADDRESS","IPV6ADDRESS"]),
         new("NETWORKMISC_ALL","NETWORKMISC","UPnP",[Toggle("UPNP_ENABLE","Allow automatic port mappings")]),
         new("DEVICEOPERMODE_ALL","DEVICEOPERMODE","Routing and IPv6",[
-            new("MODE","Routing mode","choice",[new("DUAL","Router mode · IPv4 and IPv6"),new("IPV4ONLY","Router mode · IPv4 only")])],false,"Routing changes can interrupt connectivity. Enabling bridge mode is blocked."),
+            new("MODE","Routing mode","choice",[new("DUAL","Router mode · IPv4 and IPv6"),new("IPV4ONLY","Router mode · IPv4 only"),new("BRIDGE","Bypass (bridge) mode")])],false,"Routing changes can interrupt connectivity."),
         new("LED_DISPLAY_ALL","LED_DISPLAY","Status light",[
             new("DISPLAY","Light behavior","choice",[new("1","On"),new("0","Off"),new("2","Off except alerts")])]),
         new("IPV4DHCPRANGE_ALL","IPV4DHCPRANGE","IPv4 DHCP",[
@@ -176,7 +176,8 @@ internal static class Settings
             if(operation=="ADD"){payload["ALLINTERFACES"]="1";payload["ENABLE"]="1";payload["APP"]=payload["DESCRIPTION"]?.DeepClone()??JsonValue.Create("");}
         }
         if(container=="STATICIP" && operation=="ADD")payload["ENABLE"]="1";
-        if(container=="DEVICEOPERMODE" && Catalog.Text(payload["MODE"]) is not ("DUAL" or "IPV4ONLY"))throw new RouterException("Enabling bridge mode is blocked.");
+        if(container=="DEVICEOPERMODE" && Catalog.Text(payload["MODE"]) is not ("DUAL" or "IPV4ONLY" or "BRIDGE"))throw new RouterException("Unrecognized routing mode.");
+        if(container=="DEVICEOPERMODE" && Catalog.Text(payload["MODE"])=="BRIDGE")changes.Add("WARNING: Enabling bypass may disconnect this app and make the router unreachable. Turning bypass off requires management access. Access and recovery in bridge mode have not been verified; a physical reset may be needed.");
         if(operation=="DELETE")
         {
             if(identity.Length==0)throw new RouterException("The router did not provide a rule identifier; removal is unavailable.");
@@ -203,6 +204,6 @@ internal static class Settings
         var allowed=def.Fields.Select(f=>f.Key).Concat(def.Metadata??[]).ToHashSet(StringComparer.Ordinal);
         foreach(var kv in fields)if(!allowed.Contains(kv.Key) || kv.Value is not JsonValue)
             throw new RouterException("Unexpected settings field; request refused.");
-        if(entry.Key=="DEVICEOPERMODE" && Catalog.Text(fields["MODE"]) is not ("DUAL" or "IPV4ONLY"))throw new RouterException("Enabling bridge mode is blocked.");
+        if(entry.Key=="DEVICEOPERMODE" && Catalog.Text(fields["MODE"]) is not ("DUAL" or "IPV4ONLY" or "BRIDGE"))throw new RouterException("Unrecognized routing mode.");
     }
 }

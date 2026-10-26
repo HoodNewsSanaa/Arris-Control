@@ -11,6 +11,7 @@ internal static class SelfTests
     sealed class FakeWire : IRouterWire
     {
         public Dictionary<string,JsonObject> State=new(){
+            ["DEVICEOPERMODE_ALL"]=new JsonObject{["STATUS"]="OK",["DEVICEOPERMODE"]=new JsonObject{["MODE"]="DUAL"}},
             ["DEVICE_INFO_ALL"]=JsonNode.Parse("{\"STATUS\":\"OK\",\"DEVICE_INFO\":{\"SERIAL_KEY\":\"TESTSERIAL123\"}}")!.AsObject(),
             ["NETWORKDNS_ALL"]=JsonNode.Parse("{\"STATUS\":\"OK\",\"NETWORKDNS\":{\"DYNAMICV4\":\"0\",\"DNSIPV4SERVERS\":\"8.8.8.8,1.1.1.1\",\"DYNAMICV6\":\"1\",\"DNSIPV6SERVERS\":\"0.0.0.0,0.0.0.0\"}}")!.AsObject()};
         public int Writes;public bool LoseWriteReply;
@@ -19,7 +20,9 @@ internal static class SelfTests
             if(path=="/setData")
             {
                 Writes++;if(LoseWriteReply)throw new HttpRequestException("simulated connection loss");
-                var request=JsonNode.Parse(body!)!["REQUEST"]!;var payload=request["NETWORKDNS"]!.AsObject();var dns=State["NETWORKDNS_ALL"]["NETWORKDNS"]!.AsObject();
+                Settings.ValidateEnvelope(body!);var request=JsonNode.Parse(body!)!["REQUEST"]!;
+                if(request["DEVICEOPERMODE"] is JsonObject mode){State["DEVICEOPERMODE_ALL"]["DEVICEOPERMODE"]=mode.DeepClone();return Task.FromResult(new JsonObject{["STATUS"]="OK"});}
+                var payload=request["NETWORKDNS"]!.AsObject();var dns=State["NETWORKDNS_ALL"]["NETWORKDNS"]!.AsObject();
                 foreach(var name in new[]{"DYNAMICV4","DYNAMICV6"})dns[name]=payload[name]!.DeepClone();
                 dns["DNSIPV4SERVERS"]=payload["IPV4ADDRESS"]!.DeepClone();dns["DNSIPV6SERVERS"]=payload["IPV6ADDRESS"]!.DeepClone();
                 return Task.FromResult(new JsonObject{["STATUS"]="OK"});
@@ -41,8 +44,9 @@ internal static class SelfTests
         var secret=JsonNode.Parse("{\"STATUS\":\"OK\",\"WIFI\":{\"PASSWORD\":{\"value\":\"fixture-secret\"},\"SSIDNAME\":\"fixture network\"},\"TOKEN\":\"fixture-token\"}")!;
         var rows=Catalog.Flatten(secret,"FIXTURE");Assert(rows.Any(r=>r.Value=="fixture network") && rows.All(r=>!r.Value.Contains("fixture-secret")&&!r.Value.Contains("fixture-token")),"Secret branch redaction failed.");
         var mode=Settings.Definitions.Single(d=>d.Container=="DEVICEOPERMODE");
-        Refuses(()=>Settings.Prepare(mode,"DEVICEOPERMODE",new JsonObject{["MODE"]="DUAL"},new(){["MODE"]="BRIDGE"}),"Bridge enable must be blocked.");
-        foreach(var body in new[]{"{\"REQUEST\":{\"OPERTYPE\":\"MODIFY\",\"DEVICEOPERMODE\":{\"MODE\":\"BRIDGE\"}}}","{\"REQUEST\":{\"OPERTYPE\":\"MODIFY\",\"UPDATE\":{\"CHECKNOW\":\"CheckNowDownloadInstall\"}}}","{\"REQUEST\":{\"OPERTYPE\":\"MODIFY\",\"NETWORKMISC\":{\"ADMIN_PASSWORD\":\"x\"}}}"})
+        var bridge=Settings.Prepare(mode,"DEVICEOPERMODE",new JsonObject{["MODE"]="DUAL"},new(){["MODE"]="BRIDGE"});
+        Assert(bridge.Preview.Contains("unreachable") && bridge.Preview.Contains("not been verified"),"Bridge enable warning missing.");
+        foreach(var body in new[]{"{\"REQUEST\":{\"OPERTYPE\":\"MODIFY\",\"DEVICEOPERMODE\":{\"MODE\":\"UNKNOWN\"}}}","{\"REQUEST\":{\"OPERTYPE\":\"MODIFY\",\"UPDATE\":{\"CHECKNOW\":\"CheckNowDownloadInstall\"}}}","{\"REQUEST\":{\"OPERTYPE\":\"MODIFY\",\"NETWORKMISC\":{\"ADMIN_PASSWORD\":\"x\"}}}"})
             Refuses(()=>Settings.ValidateEnvelope(body),"Unexpected modifying payload accepted.");
         var definition=Settings.Definitions.Single(d=>d.Container=="NETWORKDNS");var wire=new FakeWire();var baseline=wire.State["NETWORKDNS_ALL"]["NETWORKDNS"]!.AsObject();
         var change=Settings.Prepare(definition,"NETWORKDNS",baseline,new(){["DNSIPV4SERVERS"]="9.9.9.9,1.1.1.1"});
@@ -54,6 +58,15 @@ internal static class SelfTests
         using(var client=new RouterClient(profile,wire))
         {
             var result=await client.ApplyAsync(change);Assert(wire.Writes==1 && result.StartsWith("Saved and verified",StringComparison.Ordinal),"Save/read-back failed.");
+        }
+        var bridgeWire=new FakeWire();
+        using(var client=new RouterClient(profile,bridgeWire))
+        {
+            var enabled=await client.ApplyAsync(bridge);
+            Assert(bridgeWire.Writes==1 && enabled.StartsWith("Saved and verified") && Catalog.Text(bridgeWire.State["DEVICEOPERMODE_ALL"]["DEVICEOPERMODE"]!["MODE"])=="BRIDGE","Simulated bridge enable failed.");
+            var restore=Settings.Prepare(mode,"DEVICEOPERMODE",bridgeWire.State["DEVICEOPERMODE_ALL"]["DEVICEOPERMODE"]!.AsObject(),new(){["MODE"]="DUAL"});
+            var disabled=await client.ApplyAsync(restore);
+            Assert(bridgeWire.Writes==2 && disabled.StartsWith("Saved and verified") && Catalog.Text(bridgeWire.State["DEVICEOPERMODE_ALL"]["DEVICEOPERMODE"]!["MODE"])=="DUAL","Simulated bridge disable failed.");
         }
         var stale=new FakeWire();stale.State["NETWORKDNS_ALL"]["NETWORKDNS"]!["DNSIPV4SERVERS"]="4.4.4.4,1.1.1.1";
         using(var client=new RouterClient(profile,stale))
