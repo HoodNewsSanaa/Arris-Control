@@ -31,6 +31,7 @@ internal static class SelfTests
     }
     public static async Task RunAsync()
     {
+        await CloudSelfTests.RunAsync();
         Assert(CredentialStore.IsPrivate("192.168.7.1")&&!CredentialStore.IsPrivate("8.8.8.8")&&!CredentialStore.IsPrivate("127.0.0.1"),"Local address boundary failed.");
         var login=RouterClient.LoginBody("a+b@example.com","P@ss word!é","abcxyz123_windows_test",123456);
         var expected=Convert.ToBase64String(Encoding.UTF8.GetBytes("a%2Bb%40example.com:P%40ss%20word!%C3%A9"));

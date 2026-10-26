@@ -6,6 +6,8 @@ publish/
 *.pdb
 ui-preview.png
 selftest-*/
+cloud-selftest-*/
+Credentials/
 .local-credentials/
 .reports/
 .firmware-downloads/

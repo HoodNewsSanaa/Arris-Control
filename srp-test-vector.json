@@ -1,0 +1,13 @@
+{
+  "Pool": "us-east-1_test",
+  "User": "test-user-123",
+  "Password": "Fictional-Password123!",
+  "PrivateA": "1234567890abcdef",
+  "ServerB": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+  "Salt": "80abcd",
+  "SecretBlock": "ZmljdGlvbmFsIHNlY3JldCBibG9jaw==",
+  "Timestamp": "Mon Oct 26 03:00:00 UTC 2026",
+  "PublicA": "adb1387b0c2dae5615150e8fe837d9831f34f3e92eac3fae45a492bac91c0893202f4a68ceaa24c868aff98d98283905a77a47ded8dddc6309f456e332ffb0d97e0fe97b976f75b857257c0caeda8997c46c81110240d0817aa825fc11af8bd100bc1c97fe5fe39a355f58e2f68be06d44903fa12fdc869289e08412cd77194de1fa2a98f0ca0ce5e1f1a52b6be24a24f4767aaa4ca64f94bd4ff8a7811b1ac930b55f169d0c08ca1c1ef07a329666c3896a808a52142f2225fae7d0abe01470632cb024e820981f8886d1331566fa84da104226096d182b945a8c5f736c03baf00ad66f6073804281a9bc44eece8dec975df047a572d7b063f358aa667fac9124ca208c342e3d08cf28d434cd905694472ce7a40e712c8437fab88e150023c703112e3b13aac50c879aa6515f26202e248eba4e4d209d75711d2c76b13d73fc89e6e9c0fe3505fe06054f018d4d43de4f115392e2b54afb6c984bbb5c5d15665d3259e1b9d0f82f9b4611e71ccce896fac3d041602a5cfe8833a288e9c12322",
+  "Key": "YCcQuOBW6e7b4IW6UWQGNA==",
+  "Signature": "TKlnRmQZfU1a7HBM8Dnlszt7i4KE8vA3hBg6Nxt/fhE="
+}

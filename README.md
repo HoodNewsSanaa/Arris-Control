@@ -11,18 +11,46 @@ Android device, or separate .NET installation is needed to run it.
 
 ## Connect
 
-Use the same Windows user and PC that created your existing DPAPI-protected
-local router credential. The app finds `.local-credentials` alongside it or
-in an ancestor directory, and also checks
-`%LOCALAPPDATA%\ArrisControl\Credentials`. Otherwise select **Import
-credential** and choose an existing encrypted `ARRIS-LocalCredential` v1
-JSON file. Import verifies decryption before copying the encrypted record
-into the per-user folder. Credentials are not included in this repository
-or any release, and DPAPI records cannot simply be shared with another PC.
+Use **Credentials** to acquire an existing router credential, import a saved
+JSON, choose a retained version from history, or open the credentials folder.
+The app also finds `.local-credentials` alongside it or in an ancestor directory.
 
-This first native release consumes the local credential established by the
-Windows protocol investigation. It does not implement first-time router
-onboarding, a cloud login/recovery workflow, or automatic credential recovery.
+### Acquire through your ARRIS account
+
+Choose **Acquire from ARRIS account** and enter your current account email and
+password. The native client uses Cognito SRP, reads the existing account SSO
+credential and owned-device inventory, and decrypts the existing local login
+credential in memory. It does not reset passwords, register devices, or create
+a new password on the router. Select the exact device and its private LAN
+address; the client makes one local login, verifies the returned serial and
+protected mode, then saves a verified Windows credential JSON.
+
+The protocol configuration is read statically from a local SURFboard Central
+4.3.5 APK/XAPK or its decompiled BuildConfig.java; Android is never installed
+or executed. A nearby existing analysis folder is detected automatically;
+otherwise select the APK/XAPK once. No proprietary app archive or app client
+secret is redistributed or embedded in this project's source/executable.
+The extracted configuration is cached encrypted for this Windows user.
+
+An acquired credential is preserved encrypted even before local verification,
+under `%LOCALAPPDATA%\ArrisControl\Credentials\Acquired`, explicitly marked
+unverified. **Load saved acquisition** can reload it without another cloud
+sign-in and try local verification later. An inventory mismatch or failed
+serial check cannot create a verified record. MFA and additional Cognito
+challenges are reported instead of guessed or bypassed. Account-password
+recovery and factory onboarding are not implemented.
+
+### Credential retention
+
+Verified/acquired/imported router credentials are retained as separate files
+under `%LOCALAPPDATA%\ArrisControl\Credentials`, with unique versions;
+older records are not overwritten or deleted. Successfully loaded credentials
+from outside that folder are copied into it. Use **Open credentials folder**
+or **Use a saved credential / history**. Protocol material is encrypted in
+the `Protocol` subfolder. Cloud-account passwords and session tokens are not
+stored. Every encrypted record is bound to the current Windows user/PC using
+DPAPI; simply copying a record to a different PC does not make it decryptable.
+Credentials and target-device identifiers are not included in releases.
 
 The app authenticates directly to the private router HTTPS API on port 50011,
 explicitly preserves its management session cookie, and checks the returned
@@ -51,14 +79,17 @@ confirms. It then reads back the changed fields. An interrupted save is
 reported as unknown and is never automatically retried. Secret values are
 hidden in previews and the field browser; new Wi-Fi passwords use masked inputs.
 
-Enabling bridge mode is blocked in both the UI and request validator. Selecting
-router mode can request bridge-off only if the local API is reachable. This is
-not a verified recovery method: local reachability/login while bridged and
-WAN-disconnected operation have not been established.
+**Bypass (bridge) mode** is shown on Overview and Internet/DNS, with its current
+status and a dedicated **Turn bypass OFF** button. Enabling bridge remains
+blocked in both the UI and request validator under the existing user constraint.
+The off button restores IPv4/IPv6 router mode only after a reviewed save and
+only if the local API is reachable. This is not a verified recovery method:
+local reachability/login while bridged and WAN-disconnected operation have
+not been established.
 
 The earlier Windows client verified local login and protected configuration
 reads on a W30-family mAX. Native protocol, payload, stale-update, privacy,
-UI, and update-replacement behavior have offline tests. Native live operation
+UI, cloud-acquisition protocol, and update-replacement behavior have offline tests. Native live operation
 and setting writes still need user validation; no live changes were made to
 test this release. Complete app parity, parental profile/schedule editors,
 subnet migration, all radio/maintenance functions, and historical statistics
@@ -96,7 +127,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 `build.ps1` publishes a self-contained single-file executable, runs offline
 checks against that packaged executable, and writes the Windows asset plus
 `SHA256SUMS.txt` into `dist`. `-Offline` uses existing local runtime packs.
-No build/test accesses a router or decrypts a real credential.
+No build/test accesses a router, signs in to a real cloud account, or decrypts
+a real user credential. Fictional DPAPI persistence fixtures run where the
+Windows profile permits it and explicitly report a skip otherwise. Static
+reference extraction was additionally checked against the user's owned XAPK
+without outputting its constants, saving configuration, or using Android.
 
 GitHub Actions builds/checks pushes to `main` and creates a release for the
 project's version if that tag is not already published. Increase the project

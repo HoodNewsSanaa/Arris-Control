@@ -6,7 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AssemblyName>Arris-Control</AssemblyName>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <Description>Local Windows management for ARRIS SURFboard mAX</Description>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <EnableSingleFileAnalyzer>false</EnableSingleFileAnalyzer>
@@ -16,4 +16,5 @@
     <DebugType>none</DebugType>
     <Deterministic>true</Deterministic>
   </PropertyGroup>
+  <ItemGroup><EmbeddedResource Include="srp-test-vector.json" /></ItemGroup>
 </Project>

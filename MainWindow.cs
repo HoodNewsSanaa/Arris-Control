@@ -36,7 +36,7 @@ internal sealed class MainWindow : Window
     readonly DataGrid readGrid=GridFor(("Query","Key","*"),("Result","Status","180"),("Read at","Time","180"));
     readonly TabControl tabs=new();readonly Button refresh,import,export,updates;readonly ProgressBar progress=new(){Height=3,IsIndeterminate=true,Visibility=Visibility.Collapsed};
     readonly Dictionary<string,Snapshot> snapshots=new();readonly bool testMode;readonly CancellationTokenSource cancellation=new();
-    RouterClient? client;CredentialRecord? activeRecord;Page page=Catalog.Pages[0];Snapshot? current;bool busy,dirty,rendering,changingSelection;
+    RouterClient? client;CredentialRecord? activeRecord;Button? bypassOff,bypassOn;Page page=Catalog.Pages[0];Snapshot? current;bool busy,dirty,rendering,changingSelection;
 
     public MainWindow(bool testMode=false)
     {
@@ -51,7 +51,7 @@ internal sealed class MainWindow : Window
         var toolbar=new DockPanel{Margin=new Thickness(0,0,0,22)};main.Children.Add(toolbar);
         var buttons=new StackPanel{Orientation=Orientation.Horizontal};DockPanel.SetDock(buttons,Dock.Right);toolbar.Children.Add(buttons);
         updates=Theme.Button("Updates",async(_,_)=>await CheckUpdatesAsync());export=Theme.Button("Export coverage",(_,_)=>ExportCoverage());refresh=Theme.Button("Refresh",async(_,_)=>await RefreshAsync(),true);buttons.Children.Add(updates);buttons.Children.Add(export);buttons.Children.Add(refresh);
-        var connection=new StackPanel{Orientation=Orientation.Horizontal};connection.Children.Add(routerPicker);import=Theme.Button("Import credential",(_,_)=>ImportCredential());import.Margin=new Thickness(10,0,0,0);connection.Children.Add(import);toolbar.Children.Add(connection);
+        var connection=new StackPanel{Orientation=Orientation.Horizontal};connection.Children.Add(routerPicker);import=Theme.Button("Credentials ▾",(sender,_)=>{if(sender is Button button && button.ContextMenu is { } menu){menu.PlacementTarget=button;menu.IsOpen=true;}});import.ContextMenu=CredentialMenu();import.Margin=new Thickness(10,0,0,0);connection.Children.Add(import);toolbar.Children.Add(connection);
         var heading=new StackPanel{Margin=new Thickness(0,0,0,14)};heading.Children.Add(title);description.Margin=new Thickness(0,7,0,0);heading.Children.Add(description);Grid.SetRow(heading,1);main.Children.Add(heading);
         var message=new StackPanel();message.Children.Add(status);progress.Margin=new Thickness(0,8,0,0);message.Children.Add(progress);var messageBorder=new Border{Background=new SolidColorBrush(Color.FromRgb(228,239,252)),Padding=new Thickness(13,10,13,10),CornerRadius=new CornerRadius(5),Child=message,Margin=new Thickness(0,0,0,14)};Grid.SetRow(messageBorder,2);main.Children.Add(messageBorder);
         tabs.Items.Add(new TabItem{Header="Settings",Content=new ScrollViewer{Content=content,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,Padding=new Thickness(2,16,15,0)}});
@@ -88,7 +88,7 @@ internal sealed class MainWindow : Window
     }
     void ShowNoCredential()
     {
-        content.Children.Clear();var box=new StackPanel();box.Children.Add(Theme.Text("Connect with your existing local credential",22));box.Children.Add(Theme.Text("Import the encrypted JSON credential created by the Windows local-access setup. It must belong to this Windows account and PC. No ARRIS cloud sign-in is needed.",14,Theme.Muted));content.Children.Add(Theme.Card(box));status.Text="No protected router credential found. Use Import credential.";
+        content.Children.Clear();var box=new StackPanel();box.Children.Add(Theme.Text("Connect to your router",22));box.Children.Add(Theme.Text("Acquire the existing router credential through your ARRIS account once, or import a Windows-protected JSON credential. Saved credentials are retained in your credentials folder for subsequent local-only access.",14,Theme.Muted));var actions=new StackPanel{Orientation=Orientation.Horizontal,Margin=new Thickness(0,15,0,0)};actions.Children.Add(Theme.Button("Acquire credential",(_,_)=>AcquireCredential(),true));actions.Children.Add(Theme.Button("Import existing JSON",(_,_)=>ImportCredential()));box.Children.Add(actions);content.Children.Add(Theme.Card(box));status.Text="No protected router credential found. Open Credentials to acquire, import, or load one.";
     }
     async Task RefreshAsync(bool discard=true)
     {
@@ -113,6 +113,36 @@ internal sealed class MainWindow : Window
         try{var record=CredentialStore.Import(dialog.FileName);var list=CredentialStore.Find();routerPicker.ItemsSource=list;routerPicker.SelectedItem=list.First(r=>r.Serial==record.Serial && r.Mac==record.Mac);dirty=false;}
         catch(Exception ex){MessageBox.Show(this,ex is RouterException?ex.Message:"Could not import the protected credential.","Import credential",MessageBoxButton.OK,MessageBoxImage.Error);}
     }
+    ContextMenu CredentialMenu()
+    {
+        var menu=new ContextMenu();
+        void Add(string label,RoutedEventHandler click){var item=new MenuItem{Header=label};item.Click+=click;menu.Items.Add(item);}
+        Add("Acquire from ARRIS account…",(_,_)=>AcquireCredential());Add("Import protected credential JSON…",(_,_)=>ImportCredential());
+        Add("Use a saved credential / history…",(_,_)=>CredentialHistory());menu.Items.Add(new Separator());
+        Add("Open credentials folder",(_,_)=>
+        {
+            try{Directory.CreateDirectory(CredentialStore.UserDirectory);Process.Start(new ProcessStartInfo(CredentialStore.UserDirectory){UseShellExecute=true});}
+            catch{MessageBox.Show(this,"Could not open the credentials folder.","Credentials");}
+        });return menu;
+    }
+    void SelectCredential(CredentialRecord record)
+    {
+        dirty=false;var list=CredentialStore.Find().Where(r=>r.Serial!=record.Serial || r.Mac!=record.Mac).ToList();list.Insert(0,record);routerPicker.ItemsSource=list;routerPicker.SelectedItem=record;
+    }
+    void AcquireCredential()
+    {
+        if(busy || !DiscardEdits())return;var dialog=new AcquireWindow{Owner=this};if(dialog.ShowDialog()==true && dialog.SavedRecord is { } record)SelectCredential(record);
+    }
+    void CredentialHistory()
+    {
+        if(busy || !DiscardEdits())return;
+        var window=new Window{Title="Saved router credential history",Owner=this,Width=780,Height=440,WindowStartupLocation=WindowStartupLocation.CenterOwner,FontSize=14};
+        var panel=new DockPanel{Margin=new Thickness(20)};window.Content=panel;
+        var note=Theme.Text("Every imported, loaded, or acquired router credential is kept encrypted. Select a verified-format record to use; older versions are retained.",14,Theme.Muted);DockPanel.SetDock(note,Dock.Top);panel.Children.Add(note);
+        var list=new ListBox{Margin=new Thickness(0,15,0,15),DisplayMemberPath="Label"};
+        var records=CredentialStore.Find(true).Select(r=>new{Record=r,Label=$"{r.Created.ToLocalTime():g} · {r.Serial} · {r.Address}"}).ToArray();list.ItemsSource=records;
+        var use=Theme.Button("Use selected credential",(_,_)=>{if(list.SelectedIndex<0)return;SelectCredential(records[list.SelectedIndex].Record);window.Close();},true);DockPanel.SetDock(use,Dock.Bottom);panel.Children.Add(use);panel.Children.Add(list);window.ShowDialog();
+    }
     void FilterRows()
     {
         var query=filter.Text.Trim();fullGrid.ItemsSource=current?.Rows.Where(r=>query.Length==0 || r.Field.Contains(query,StringComparison.OrdinalIgnoreCase)||r.Value.Contains(query,StringComparison.OrdinalIgnoreCase)||r.Source.Contains(query,StringComparison.OrdinalIgnoreCase)).ToArray()??[];
@@ -129,6 +159,7 @@ internal sealed class MainWindow : Window
         else if(page.Id=="mesh")RenderTopology(snapshot);
         else
         {
+            if(page.Id=="internet")content.Children.Add(BuildBypassSection(snapshot));
             foreach(var section in Settings.Sections(snapshot))content.Children.Add(BuildSection(section));
             foreach(var def in Settings.Definitions.Where(d=>d.Collection && snapshot.Data.ContainsKey(d.Key)))
             {
@@ -158,7 +189,23 @@ internal sealed class MainWindow : Window
         Tile("Installed firmware",Get("FIRMWARE_ALL","FIRMWARE","SW_VERSION"));Tile("Internet connection",Get("DEVICESTATUS_ALL","DEVICESTATUS","WANSTATUS"));Tile("IPv4 DNS",Get("NETWORKDNS_ALL","NETWORKDNS","DNSIPV4SERVERS"));Tile("IPv6 DNS mode",Get("NETWORKDNS_ALL","NETWORKDNS","DYNAMICV6")=="1"?"Automatic":"Manual / see DNS settings");content.Children.Add(cards);
         var shortcuts=new StackPanel();shortcuts.Children.Add(Theme.Text("Manage your network",21));var row=new WrapPanel{Margin=new Thickness(0,14,0,0)};
         foreach(var id in new[]{"wifi","internet","lan","ports"}){var target=Catalog.Pages.First(p=>p.Id==id);row.Children.Add(Theme.Button(target.Name,(_,_)=>nav.SelectedItem=target));}shortcuts.Children.Add(row);content.Children.Add(Theme.Card(shortcuts));
-        content.Children.Add(Theme.Card(Theme.Text("Enabling bridge mode is blocked. Local access while bridged and recovery after switching modes have not been verified.",14,Theme.Muted)));
+        content.Children.Add(BuildBypassSection(snapshot));
+    }
+    Border BuildBypassSection(Snapshot snapshot)
+    {
+        var box=new StackPanel();box.Children.Add(Theme.Text("Bypass (bridge) mode",20));
+        JsonObject? modeData=null;if(snapshot.Data.TryGetValue("DEVICEOPERMODE_ALL",out var data))modeData=data["DEVICEOPERMODE"] as JsonObject;
+        var mode=Catalog.Text(modeData?["MODE"]);var known=mode is "DUAL" or "IPV4ONLY" or "BRIDGE";
+        var state=Theme.Text(mode=="BRIDGE"?"On · Routing is bypassed":known?"Off · Router mode is active":"Unknown · Refresh to read the router",17);state.Margin=new Thickness(0,10,0,7);box.Children.Add(state);
+        box.Children.Add(Theme.Text("Bypass mode changes the router's routing functions. Management access and recovery after enabling it have not been verified.",13,Theme.Muted));
+        var buttons=new StackPanel{Orientation=Orientation.Horizontal,Margin=new Thickness(0,14,0,0)};
+        var off=Theme.Button("Turn bypass OFF",async(_,_)=>
+        {
+            if(modeData is null || mode!="BRIDGE")return;var definition=Settings.Definitions.Single(d=>d.Container=="DEVICEOPERMODE");
+            var section=new SettingSection(definition,"DEVICEOPERMODE",0,"",Settings.Filter(definition,modeData),"Bypass mode");
+            await SaveSectionAsync(section,new Dictionary<string,Func<string>>{["MODE"]=()=>"DUAL"},"MODIFY");
+        },true);off.IsEnabled=mode=="BRIDGE";off.ToolTip="Restore router mode with IPv4 and IPv6; a review appears before anything is sent.";
+        var on=new Button{Content="Enable bypass (blocked)",IsEnabled=false,ToolTip="Enabling bridge mode remains blocked under your earlier recovery restriction."};bypassOff=off;bypassOn=on;buttons.Children.Add(off);buttons.Children.Add(on);box.Children.Add(buttons);return Theme.Card(box);
     }
     void RenderTopology(Snapshot snapshot)
     {
@@ -256,12 +303,13 @@ internal sealed class MainWindow : Window
         catch(Exception ex){status.Text=ex is RouterException?ex.Message:"Could not check or download an update. The current app remains usable.";}
         finally{SetBusy(false);}
     }
-    public void LoadFixture()
+    public void LoadFixture(string mode="DUAL")
     {
         page=Catalog.Pages.First(p=>p.Id=="internet");title.Text=page.Name;description.Text=page.Description;
         changingSelection=true;nav.SelectedItem=page;changingSelection=false;status.Text="Example data · No router requests";
         var data=new Dictionary<string,JsonObject>{["NETWORKDNS_ALL"]=JsonNode.Parse("{\"STATUS\":\"OK\",\"NETWORKDNS\":{\"DYNAMICV4\":\"0\",\"DNSIPV4SERVERS\":\"8.8.8.8,1.1.1.1\",\"DYNAMICV6\":\"1\",\"DNSIPV6SERVERS\":\"0.0.0.0,0.0.0.0\"}}")!.AsObject(),["DEVICEOPERMODE_ALL"]=JsonNode.Parse("{\"STATUS\":\"OK\",\"DEVICEOPERMODE\":{\"MODE\":\"DUAL\"}}")!.AsObject()};
+        data["DEVICEOPERMODE_ALL"]["DEVICEOPERMODE"]!["MODE"]=mode;
         current=new(page,data,[new("NETWORKDNS_ALL",200,"OK",DateTimeOffset.Now,true)],data.SelectMany(kv=>Catalog.Flatten(kv.Value,kv.Key)).ToList(),DateTimeOffset.Now);snapshots[page.Id]=current;Render(current);
     }
-    public void VerifyFixture(){if(content.Children.Count<2 || fullGrid.Items.Count<5 || tabs.Items.Count!=2)throw new InvalidOperationException("Native UI binding failed.");}
+    public void VerifyFixture(){if(content.Children.Count<2 || fullGrid.Items.Count<5 || tabs.Items.Count!=2 || bypassOn?.IsEnabled!=false || bypassOff?.IsEnabled!=(Catalog.Text(current!.Data["DEVICEOPERMODE_ALL"]["DEVICEOPERMODE"]?["MODE"])=="BRIDGE"))throw new InvalidOperationException("Native UI/bypass binding failed.");}
 }

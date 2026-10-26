@@ -16,11 +16,14 @@ internal record FieldRow(string Field, string Value, string Source);
 internal record ReadResult(string Key, int? Http, string Status, DateTimeOffset Time, bool Readable);
 internal sealed record Snapshot(Page Page, Dictionary<string, JsonObject> Data, List<ReadResult> Reads,
     List<FieldRow> Rows, DateTimeOffset Time);
-internal record CredentialRecord(string Path, string Serial, string Mac, string Address)
+internal record CredentialRecord(string Path, string Serial, string Mac, string Address, DateTimeOffset Created=default)
 {
     public override string ToString() => $"{Address} · {Serial}";
 }
-internal record RouterCredential(string UserName, string Password);
+internal record RouterCredential(string UserName, string Password)
+{
+    public override string ToString()=>"Router credential (values withheld)";
+}
 internal class RouterException(string message, string code = "") : Exception(message)
 {
     public string Code { get; } = code;
@@ -88,9 +91,10 @@ internal static class CredentialStore
         if (Catalog.Text(r["Format"])!="ARRIS-LocalCredential" || Catalog.Text(r["Version"])!="1" ||
             !Regex.IsMatch(serial,"^[A-Z0-9]{12,24}$") || !Regex.IsMatch(mac,"^[A-F0-9]{12}$") || !IsPrivate(address))
             throw new RouterException("Unsupported credential format or router address.");
-        return new(path,serial,mac,address);
+        var created=DateTimeOffset.TryParse(Catalog.Text(r["CreatedAtUTC"]),out var timestamp)?timestamp:new DateTimeOffset(File.GetLastWriteTimeUtc(path));
+        return new(path,serial,mac,address,created);
     }
-    public static List<CredentialRecord> Find()
+    public static List<CredentialRecord> Find(bool history=false)
     {
         var dirs=new HashSet<string>(StringComparer.OrdinalIgnoreCase){UserDirectory};
         var dir=new DirectoryInfo(AppContext.BaseDirectory);
@@ -98,9 +102,10 @@ internal static class CredentialStore
         var list=new List<CredentialRecord>();
         foreach(var d in dirs.Where(Directory.Exists)) foreach(var p in Directory.EnumerateFiles(d,"*.json"))
             try{list.Add(Inspect(p));}catch(Exception ex) when(ex is IOException or JsonException or RouterException){}
-        return list.OrderByDescending(r=>Path.GetFileName(r.Path),StringComparer.Ordinal).DistinctBy(r=>(r.Serial,r.Mac)).ToList();
+        var sorted=list.OrderByDescending(r=>r.Created).ThenBy(r=>r.Path.StartsWith(UserDirectory,StringComparison.OrdinalIgnoreCase)?0:1).ToList();
+        return history?sorted:sorted.DistinctBy(r=>(r.Serial,r.Mac)).ToList();
     }
-    public static RouterCredential Load(CredentialRecord r)
+    public static RouterCredential Load(CredentialRecord r,bool preserve=true)
     {
         var verified=Inspect(r.Path);
         if(verified.Serial!=r.Serial || verified.Mac!=r.Mac || verified.Address!=r.Address) throw new RouterException("Credential metadata changed. Select the router again.");
@@ -113,6 +118,7 @@ internal static class CredentialStore
             using var doc=JsonDocument.Parse(plain);
             var user=doc.RootElement.GetProperty("UserName").GetString();var pass=doc.RootElement.GetProperty("Password").GetString();
             if(string.IsNullOrEmpty(user)||string.IsNullOrEmpty(pass)) throw new RouterException("Empty local credential.");
+            if(preserve)PreserveLoaded(r);
             return new(user,pass);
         }
         catch(CryptographicException){throw new RouterException("Windows could not open this credential. Use the same Windows account that created it, or import a credential created on this PC.");}
@@ -123,6 +129,33 @@ internal static class CredentialStore
         var r=Inspect(path);_ = Load(r);Directory.CreateDirectory(UserDirectory);
         var target=Path.Combine(UserDirectory,$"{r.Serial}-{DateTime.UtcNow:yyyyMMddTHHmmssfffffffZ}-{Guid.NewGuid():N}.json");
         File.Copy(path,target,false);return Inspect(target);
+    }
+    static void PreserveLoaded(CredentialRecord record)
+    {
+        if(Path.GetFullPath(record.Path).StartsWith(Path.GetFullPath(UserDirectory)+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase))return;
+        Directory.CreateDirectory(UserDirectory);
+        var hash=ReleaseUpdater.Hash(record.Path);
+        var destination=Path.Combine(UserDirectory,$"loaded-{record.Serial}-{record.Mac}-{hash}.json");
+        if(!File.Exists(destination))File.Copy(record.Path,destination,false);
+    }
+    public static CredentialRecord SaveVerified(RouterCredential credential,CloudDevice device,string address,string? directory=null)
+    {
+        if(!IsPrivate(address) || !Regex.IsMatch(device.Serial,"^[A-Z0-9]{12,24}$") || !Regex.IsMatch(device.Mac,"^[A-F0-9]{12}$"))throw new RouterException("Invalid target identity for credential storage.");
+        var plain=JsonSerializer.SerializeToUtf8Bytes(credential);var entropy=Encoding.UTF8.GetBytes($"ArrisLocalCredential.v1|{device.Serial}|{device.Mac}");byte[]? check=null;string? temporary=null;
+        try
+        {
+            var cipher=ProtectedData.Protect(plain,entropy,DataProtectionScope.CurrentUser);
+            check=ProtectedData.Unprotect(cipher,entropy,DataProtectionScope.CurrentUser);
+            if(!CryptographicOperations.FixedTimeEquals(plain,check))throw new RouterException("Windows credential-protection verification failed. No record was saved.");
+            var record=new{Format="ARRIS-LocalCredential",Version=1,TargetSerial=device.Serial,ExpectedMac=device.Mac,RouterAddress=address,
+                CreatedAtUTC=DateTimeOffset.UtcNow,Protection="Windows DPAPI CurrentUser",LocalAuthenticationVerified=true,
+                CredentialVerifiedVia="Cloud account SSO then direct local login and protected serial/mode reads",CloudTokensSaved=false,Ciphertext=Convert.ToBase64String(cipher)};
+            var folder=directory??UserDirectory;Directory.CreateDirectory(folder);var target=Path.Combine(folder,$"{device.Serial}-{DateTime.UtcNow:yyyyMMddTHHmmssfffffffZ}-{Guid.NewGuid():N}.json");
+            temporary=target+".tmp";File.WriteAllText(temporary,JsonSerializer.Serialize(record,new JsonSerializerOptions{WriteIndented=true}));File.Move(temporary,target);temporary=null;
+            return Inspect(target);
+        }
+        catch(CryptographicException){throw new RouterException("Windows could not protect this credential for the current user. Nothing was saved; plaintext storage is not used.");}
+        finally{CryptographicOperations.ZeroMemory(plain);CryptographicOperations.ZeroMemory(entropy);if(check is not null)CryptographicOperations.ZeroMemory(check);if(temporary is not null && File.Exists(temporary))File.Delete(temporary);}
     }
 }
 
