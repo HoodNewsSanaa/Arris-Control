@@ -41,6 +41,8 @@ for _ in range(45):
     logs = adb('logcat', '-d')
     if 'FATAL EXCEPTION' in logs or 'FATAL UNHANDLED EXCEPTION' in logs or 'Operation result' in ui:
         Path('artifacts/android-smoke.log').write_text(logs)
+        print('Fixture counters:', fixture.logins, fixture.anonymous_reads, fixture.protected_reads)
+        print(adb('logcat', '-d', '-s', 'ArrisControlSelfTest:E', 'AndroidRuntime:E', 'DOTNET:I'))
         raise SystemExit('Android offline smoke test failed; see android-smoke.log')
 else:
     Path('artifacts/android-smoke.log').write_text(adb('logcat', '-d'))

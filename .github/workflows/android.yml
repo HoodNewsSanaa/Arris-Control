@@ -84,12 +84,14 @@ jobs:
           disable-animations: true
           script: python3 Android/smoke-test.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
         with:
           name: Arris-Control-Android
           path: |
             artifacts/Arris-Control-android.apk
             artifacts/SHA256SUMS-android.txt
             artifacts/Android-UI-preview.png
+            artifacts/android-smoke.log
           if-no-files-found: error
           retention-days: 90
       - name: Publish Android preview download

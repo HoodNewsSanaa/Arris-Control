@@ -162,6 +162,7 @@ public sealed class MainActivity : Activity
         catch (Exception ex)
         {
             if (IsDestroyed) return;
+            if (Intent?.GetBooleanExtra("offlineSelfTest", false) == true) Android.Util.Log.Error("ArrisControlSelfTest", ex.ToString());
             status.Text = ex is RouterException ? ex.Message :
                 ex is System.Net.Http.HttpRequestException requestFailure ? RouterDiscovery.ConnectionFailure(requestFailure, address?.Text ?? "the selected router") :
                 "The operation could not complete. No success was assumed. Check your connection and try again.";
