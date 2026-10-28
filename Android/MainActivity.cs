@@ -108,7 +108,7 @@ public sealed class MainActivity : Activity
         activityProgress.IndeterminateTintList = Android.Content.Res.ColorStateList.ValueOf(Color.White);
         root.AddView(activityProgress, new LinearLayout.LayoutParams(-1, Dp(2)));
         var scroll = new ScrollView(this) { FillViewport = true };
-        scroll.ClipToPadding = false;
+        scroll.SetClipToPadding(false);
         content = Column(); content.SetPadding(0, Dp(8), 0, Dp(18)); scroll.AddView(content);
         root.AddView(scroll, new LinearLayout.LayoutParams(-1, 0, 1)); SetContentView(root);
     }
