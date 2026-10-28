@@ -26,3 +26,5 @@ artifacts/
 *.keystore
 *.jks
 local.properties
+__pycache__/
+*.pyc

@@ -100,7 +100,7 @@ public sealed class MainActivity : Activity
         if (busy) return;
         busy = true; foreach (var b in buttons) b.Enabled = false;
         try { await action(); }
-        catch (OperationCanceledException) { if (!IsDestroyed) status.Text = "Operation cancelled."; }
+        catch (System.OperationCanceledException) { if (!IsDestroyed) status.Text = "Operation cancelled."; }
         catch (Exception ex)
         {
             if (IsDestroyed) return;

@@ -32,7 +32,7 @@ internal static class CredentialProtection
             try
             {
                 using var cipher = Cipher.GetInstance("AES/GCM/NoPadding")!;
-                using var key = Key(); cipher.Init(CipherMode.EncryptMode, key);
+                using var key = Key(); cipher.Init(Javax.Crypto.CipherMode.EncryptMode, key);
                 if (entropy is not null) cipher.UpdateAAD(entropy);
                 var nonce = cipher.GetIV()!; var encrypted = cipher.DoFinal(data)!;
                 return new byte[] { 1, (byte)nonce.Length }.Concat(nonce).Concat(encrypted).ToArray();
@@ -49,7 +49,7 @@ internal static class CredentialProtection
             {
                 using var cipher = Cipher.GetInstance("AES/GCM/NoPadding")!;
                 using var key = Key(); using var spec = new GCMParameterSpec(128, data[2..14]);
-                cipher.Init(CipherMode.DecryptMode, key, spec);
+                cipher.Init(Javax.Crypto.CipherMode.DecryptMode, key, spec);
                 if (entropy is not null) cipher.UpdateAAD(entropy);
                 return cipher.DoFinal(data[14..])!;
             }
