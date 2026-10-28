@@ -92,7 +92,7 @@ internal static class SelfTests
         Refuses(()=>ReleaseUpdater.ValidateDigest(hash,hash,"sha256:"+new string('B',64)),"GitHub digest mismatch accepted.");
         Refuses(()=>ReleaseUpdater.ValidateAsset(new Uri("https://github.com/other/repo/releases/download/v1.2.3/"+ReleaseUpdater.AssetName),"v1.2.3",ReleaseUpdater.AssetName),"Foreign repository accepted.");
         Refuses(()=>ReleaseUpdater.ParseChecksum(hash+"  "+ReleaseUpdater.AssetName+"\n"+hash+"  "+ReleaseUpdater.AssetName),"Ambiguous checksum accepted.");
-        var directory=Path.Combine(AppContext.BaseDirectory,"selftest-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(directory);
+        var directory=Path.Combine(Path.GetTempPath(),"selftest-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(directory);
         try
         {
             var old=Path.Combine(directory,"old.exe");var candidate=Path.Combine(directory,"new.data");File.WriteAllText(old,"old fixture");File.WriteAllText(candidate,"new fixture");

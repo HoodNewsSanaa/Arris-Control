@@ -32,7 +32,7 @@ internal static class DiscoverySelfTests
             try{await RouterDiscovery.ResolveAsync("192.168.7.1","001122334455",["192.168.1.100"],(a,m,ct)=>Task.FromCanceled<bool>(ct),cancel.Token);}catch(OperationCanceledException){cancelled=true;}
             Check(cancelled,"Discovery cancellation was lost.");
         }
-        var folder=Path.Combine(AppContext.BaseDirectory,"discovery-test-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(folder);
+        var folder=Path.Combine(Path.GetTempPath(),"discovery-test-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(folder);
         try
         {
             var file=Path.Combine(folder,"original.json");

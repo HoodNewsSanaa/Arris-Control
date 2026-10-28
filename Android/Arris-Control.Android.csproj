@@ -3,6 +3,7 @@
     <TargetFramework>net10.0-android</TargetFramework>
     <SupportedOSPlatformVersion>26</SupportedOSPlatformVersion>
     <OutputType>Exe</OutputType>
+    <RootNamespace>ArrisControl</RootNamespace>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationId>com.hoodnewssanaa.arriscontrol</ApplicationId>

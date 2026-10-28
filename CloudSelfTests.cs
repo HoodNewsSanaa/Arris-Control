@@ -63,7 +63,7 @@ internal static class CloudSelfTests
         Assert(refused && extraChallenge.Operations.Count==1,"Unsupported challenge continued into account/router access.");
         using var missing=new FakeCloud{MissingSso=true};refused=false;try{await CloudAcquisition.AcquireAsync("fictional@example.com","FictionalCloudPassword123!",Config,missing);}catch(RouterException){refused=true;}
         Assert(refused,"Missing account credential was fabricated or accepted.");
-        var directory=Path.Combine(AppContext.BaseDirectory,"cloud-selftest-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(directory);
+        var directory=Path.Combine(Path.GetTempPath(),"cloud-selftest-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(directory);
         try
         {
             var java=Path.Combine(directory,"BuildConfig.java");File.WriteAllText(java,string.Join('\n',Names.Select((n,i)=>$"public static final String {n} = \"{Values[i]}\";")));
