@@ -31,6 +31,9 @@ internal static class RouterDiscovery
     static string[] Candidates(string saved)
     {
         var list=new List<string>{saved};
+#if ANDROID
+        list.AddRange(AndroidNetwork.Candidates());
+#else
         foreach(var adapter in NetworkInterface.GetAllNetworkInterfaces().Where(n=>n.OperationalStatus==OperationalStatus.Up &&
             n.NetworkInterfaceType is NetworkInterfaceType.Wireless80211 or NetworkInterfaceType.Ethernet))
         {
@@ -39,6 +42,7 @@ internal static class RouterDiscovery
             foreach(var unicast in properties.UnicastAddresses.Where(a=>a.Address.AddressFamily==AddressFamily.InterNetwork))
                 list.AddRange(SubnetCandidates(unicast.Address.ToString(),unicast.IPv4Mask.ToString()));
         }
+#endif
         return list.Where(CredentialStore.IsPrivate).Distinct(StringComparer.Ordinal).Take(1024).ToArray();
     }
     internal static bool CertificateMatches(X509Certificate2 certificate,string mac,DateTime now)=>

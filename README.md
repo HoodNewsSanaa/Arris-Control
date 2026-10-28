@@ -1,6 +1,6 @@
 # Arris Control
 
-A native Windows application for local management of ARRIS SURFboard mAX
+Native Windows and Android applications for local management of ARRIS SURFboard mAX
 routers. Uses regular setting forms, switches, dropdowns, and Save buttons,
 with a separate **Full settings** browser for all returned fields.
 
@@ -9,7 +9,11 @@ Download **Arris-Control-win-x64.exe** from
 The release is a self-contained Windows x64 executable: no PowerShell,
 Android device, or separate .NET installation is needed to run it.
 
-## Connect
+## Android APK
+
+Android previews are available from [Releases](https://github.com/HoodNewsSanaa/Arris-Control/releases). See [Android setup, build and limitations](Android/README.md). The Android app shares the local protocol/settings engine and uses Android Keystore encryption and explicit local-network routing.
+
+## Connect (Windows)
 
 Use **Credentials** to acquire an existing router credential, import a saved
 JSON, choose a retained version from history, or open the credentials folder.

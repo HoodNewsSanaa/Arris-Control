@@ -21,3 +21,8 @@ source-review/
 *.tar.gz
 *.tgz
 discovery-test-*/
+
+artifacts/
+*.keystore
+*.jks
+local.properties

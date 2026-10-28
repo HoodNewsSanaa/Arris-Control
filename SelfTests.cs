@@ -84,6 +84,8 @@ internal static class SelfTests
         {
             bool refused=false;try{await client.ApplyAsync(change);}catch(RouterException){refused=true;}Assert(refused && wrong.Writes==0,"Wrong target accepted a write.");
         }
+
+#if !PORTABLE_TEST && !ANDROID
         Assert(ReleaseUpdater.IsNewer("v1.2.3",new Version(1,2,2),out _)&&!ReleaseUpdater.IsNewer("v1.2.3-beta",new Version(1,2,2),out _)&&!ReleaseUpdater.IsNewer("v1.2.1",new Version(1,2,2),out _),"Update version policy failed.");
         var hash=new string('A',64);Assert(ReleaseUpdater.ParseChecksum(hash+"  "+ReleaseUpdater.AssetName)==hash,"Checksum parsing failed.");
         Refuses(()=>ReleaseUpdater.ValidateDigest(hash,new string('B',64),null),"Corrupted update accepted.");
@@ -97,5 +99,6 @@ internal static class SelfTests
             ReleaseUpdater.ReplaceFile(candidate,old,ReleaseUpdater.Hash(candidate));Assert(File.ReadAllText(old)=="new fixture" && Directory.EnumerateFiles(directory,"*.previous").Any(p=>File.ReadAllText(p)=="old fixture"),"Atomic replacement or backup failed.");
         }
         finally{foreach(var file in Directory.EnumerateFiles(directory))File.Delete(file);Directory.Delete(directory,false);}
+#endif
     }
 }

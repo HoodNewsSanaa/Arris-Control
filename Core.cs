@@ -114,14 +114,14 @@ internal static class CredentialStore
         var entropy=Encoding.UTF8.GetBytes($"ArrisLocalCredential.v1|{r.Serial}|{r.Mac}");byte[]? plain=null;
         try
         {
-            plain=ProtectedData.Unprotect(cipher,entropy,DataProtectionScope.CurrentUser);
+            plain=CredentialProtection.Unprotect(cipher,entropy);
             using var doc=JsonDocument.Parse(plain);
             var user=doc.RootElement.GetProperty("UserName").GetString();var pass=doc.RootElement.GetProperty("Password").GetString();
             if(string.IsNullOrEmpty(user)||string.IsNullOrEmpty(pass)) throw new RouterException("Empty local credential.");
             if(preserve)PreserveLoaded(r);
             return new(user,pass);
         }
-        catch(CryptographicException){throw new RouterException("Windows could not open this credential. Use the same Windows account that created it, or import a credential created on this PC.");}
+        catch(CryptographicException){throw new RouterException("This device could not open this credential. Use the device and account that created this credential. Windows DPAPI files cannot be opened on Android.");}
         finally{CryptographicOperations.ZeroMemory(cipher);CryptographicOperations.ZeroMemory(entropy);if(plain is not null) CryptographicOperations.ZeroMemory(plain);}
     }
     public static CredentialRecord Import(string path)
@@ -134,7 +134,8 @@ internal static class CredentialStore
     {
         if(Path.GetFullPath(record.Path).StartsWith(Path.GetFullPath(UserDirectory)+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase))return;
         Directory.CreateDirectory(UserDirectory);
-        var hash=ReleaseUpdater.Hash(record.Path);
+        using var input=File.OpenRead(record.Path);
+        var hash=Convert.ToHexString(SHA256.HashData(input));
         var destination=Path.Combine(UserDirectory,$"loaded-{record.Serial}-{record.Mac}-{hash}.json");
         if(!File.Exists(destination))File.Copy(record.Path,destination,false);
     }
@@ -158,17 +159,17 @@ internal static class CredentialStore
         var plain=JsonSerializer.SerializeToUtf8Bytes(credential);var entropy=Encoding.UTF8.GetBytes($"ArrisLocalCredential.v1|{device.Serial}|{device.Mac}");byte[]? check=null;string? temporary=null;
         try
         {
-            var cipher=ProtectedData.Protect(plain,entropy,DataProtectionScope.CurrentUser);
-            check=ProtectedData.Unprotect(cipher,entropy,DataProtectionScope.CurrentUser);
-            if(!CryptographicOperations.FixedTimeEquals(plain,check))throw new RouterException("Windows credential-protection verification failed. No record was saved.");
+            var cipher=CredentialProtection.Protect(plain,entropy);
+            check=CredentialProtection.Unprotect(cipher,entropy);
+            if(!CryptographicOperations.FixedTimeEquals(plain,check))throw new RouterException("Credential-protection verification failed. No record was saved.");
             var record=new{Format="ARRIS-LocalCredential",Version=1,TargetSerial=device.Serial,ExpectedMac=device.Mac,RouterAddress=address,
-                CreatedAtUTC=DateTimeOffset.UtcNow,Protection="Windows DPAPI CurrentUser",LocalAuthenticationVerified=true,
+                CreatedAtUTC=DateTimeOffset.UtcNow,Protection=CredentialProtection.Description,LocalAuthenticationVerified=true,
                 CredentialVerifiedVia="Cloud account SSO then direct local login and protected serial/mode reads",CloudTokensSaved=false,Ciphertext=Convert.ToBase64String(cipher)};
             var folder=directory??UserDirectory;Directory.CreateDirectory(folder);var target=Path.Combine(folder,$"{device.Serial}-{DateTime.UtcNow:yyyyMMddTHHmmssfffffffZ}-{Guid.NewGuid():N}.json");
             temporary=target+".tmp";File.WriteAllText(temporary,JsonSerializer.Serialize(record,new JsonSerializerOptions{WriteIndented=true}));File.Move(temporary,target);temporary=null;
             return Inspect(target);
         }
-        catch(CryptographicException){throw new RouterException("Windows could not protect this credential for the current user. Nothing was saved; plaintext storage is not used.");}
+        catch(CryptographicException){throw new RouterException("This device could not protect this credential for the current user. Nothing was saved; plaintext storage is not used.");}
         finally{CryptographicOperations.ZeroMemory(plain);CryptographicOperations.ZeroMemory(entropy);if(check is not null)CryptographicOperations.ZeroMemory(check);if(temporary is not null && File.Exists(temporary))File.Delete(temporary);}
     }
 }
@@ -183,6 +184,9 @@ internal sealed class LocalWire : IRouterWire
     public LocalWire(CredentialRecord r)
     {
         if(!CredentialStore.IsPrivate(r.Address))throw new RouterException("A private router IPv4 address is required.");
+#if ANDROID
+        AndroidNetwork.UseLocal();
+#endif
         origin=new Uri($"https://{r.Address}:50011/");
         var handler=new HttpClientHandler{AllowAutoRedirect=false,UseCookies=false,UseProxy=false};
         handler.ServerCertificateCustomValidationCallback=(_,cert,_,_)=>cert is not null &&
@@ -246,6 +250,9 @@ internal sealed class RouterClient : IDisposable
     public async Task ConnectAsync(CancellationToken token=default)
     {
         if(testTransport && authenticated)return;
+#if ANDROID
+        AndroidNetwork.UseLocal();
+#endif
         Progress?.Invoke("Locating the selected router on local networks…");
         var address=await RouterDiscovery.ResolveAsync(record,token);
         if(address!=record.Address)authenticated=false;

@@ -16,5 +16,6 @@
     <DebugType>none</DebugType>
     <Deterministic>true</Deterministic>
   </PropertyGroup>
+  <ItemGroup><Compile Remove="Android/**/*.cs;Tests/**/*.cs" /></ItemGroup>
   <ItemGroup><EmbeddedResource Include="srp-test-vector.json" /></ItemGroup>
 </Project>

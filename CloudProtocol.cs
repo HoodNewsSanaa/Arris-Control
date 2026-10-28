@@ -79,11 +79,11 @@ internal static class CloudProtocol
         try
         {
             using var json=JsonDocument.Parse(File.ReadAllBytes(file));var cipher=Convert.FromBase64String(json.RootElement.GetProperty("Ciphertext").GetString()!);
-            plain=ProtectedData.Unprotect(cipher,Entropy,DataProtectionScope.CurrentUser);
+            plain=CredentialProtection.Unprotect(cipher,Entropy);
             var configuration=JsonSerializer.Deserialize<CloudConfiguration>(plain)??throw new RouterException("Invalid protected protocol configuration.");configuration.Validate();return configuration;
         }
         catch(Exception ex) when(ex is CryptographicException or JsonException or FormatException or IOException)
-        {throw new RouterException("Windows could not load the saved protocol reference. Select the APK/XAPK reference again.");}
+        {throw new RouterException("This device could not load the saved protocol reference. Select the APK/XAPK reference again.");}
         finally{if(plain is not null)CryptographicOperations.ZeroMemory(plain);}
     }
     public static void Save(CloudConfiguration configuration)
@@ -91,12 +91,12 @@ internal static class CloudProtocol
         configuration.Validate();var plain=JsonSerializer.SerializeToUtf8Bytes(configuration);byte[]? check=null;
         try
         {
-            var cipher=ProtectedData.Protect(plain,Entropy,DataProtectionScope.CurrentUser);check=ProtectedData.Unprotect(cipher,Entropy,DataProtectionScope.CurrentUser);
+            var cipher=CredentialProtection.Protect(plain,Entropy);check=CredentialProtection.Unprotect(cipher,Entropy);
             if(!CryptographicOperations.FixedTimeEquals(plain,check))throw new RouterException("Protocol protection round-trip failed.");
             Directory.CreateDirectory(Folder);var file=Path.Combine(Folder,$"protocol-{DateTime.UtcNow:yyyyMMddTHHmmssfffffffZ}-{Guid.NewGuid():N}.json");
-            File.WriteAllText(file,JsonSerializer.Serialize(new{Format="ARRIS-CloudProtocol",Version=1,Protection="Windows DPAPI CurrentUser",Ciphertext=Convert.ToBase64String(cipher)}));
+            File.WriteAllText(file,JsonSerializer.Serialize(new{Format="ARRIS-CloudProtocol",Version=1,Protection=CredentialProtection.Description,Ciphertext=Convert.ToBase64String(cipher)}));
         }
-        catch(CryptographicException){throw new RouterException("Windows could not protect the protocol reference. No plaintext fallback is used.");}
+        catch(CryptographicException){throw new RouterException("This device could not protect the protocol reference. No plaintext fallback is used.");}
         finally{CryptographicOperations.ZeroMemory(plain);if(check is not null)CryptographicOperations.ZeroMemory(check);}
     }
     public static CloudConfiguration? Discover()

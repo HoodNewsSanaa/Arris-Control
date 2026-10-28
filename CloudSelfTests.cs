@@ -80,7 +80,7 @@ internal static class CloudSelfTests
     {
         // Use fictional data only. Restricted tool profiles may lack DPAPI;
         // a successful Windows profile must pass actual disk round-trips.
-        try{var probe=ProtectedData.Protect([1,2,3],null,DataProtectionScope.CurrentUser);CryptographicOperations.ZeroMemory(probe);}
+        try{var probe=CredentialProtection.Protect([1,2,3],null);CryptographicOperations.ZeroMemory(probe);}
         catch(CryptographicException){Console.WriteLine("SKIP: DPAPI persistence fixture unavailable in this restricted Windows profile; no plaintext fallback or file written.");return;}
         var device=acquired.Devices.Single();var first=CredentialStore.SaveVerified(acquired.Credential,device,"192.168.7.1",directory);
         var second=CredentialStore.SaveVerified(acquired.Credential,device,"192.168.7.1",directory);
@@ -90,7 +90,7 @@ internal static class CloudSelfTests
         var pending=AcquisitionStore.Save(acquired,directory);var restored=AcquisitionStore.Load(pending,false);
         Assert(restored.Credential==acquired.Credential && restored.Devices.SequenceEqual(acquired.Devices),"Acquisition disk round-trip failed.");
         Assert(!File.ReadAllText(pending).Contains(acquired.Credential.Password),"Plaintext acquired credential written to disk.");
-        Console.WriteLine("PASS: Windows DPAPI disk round-trips and retention of distinct credential versions (fictional data only).");
+        Console.WriteLine("PASS: encrypted disk round-trips and retention of distinct credential versions (fictional data only).");
     }
     static byte[] DexFixture()
     {
