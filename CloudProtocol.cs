@@ -29,6 +29,16 @@ internal static class CloudProtocol
         if(Names.Any(n=>!values.ContainsKey(n)))throw new RouterException("The reference is missing ARRIS cloud protocol constants.");
         var configuration=new CloudConfiguration(values[Names[0]],values[Names[1]],values[Names[2]],values[Names[3]]);configuration.Validate();return configuration;
     }
+    public static CloudConfiguration ReadReferences(IEnumerable<string> paths)
+    {
+        foreach(var path in paths.Where(File.Exists).Distinct())
+        {
+            try { return ReadReference(path); }
+            catch(RouterException) { /* BuildConfig can live in a split APK rather than the base APK. */ }
+            catch(UnauthorizedAccessException) { }
+        }
+        throw new RouterException("The installed APK/splits do not expose the supported ARRIS configuration. Import your own SURFboard Central 4.3.5 APK/XAPK or BuildConfig.java. No app was installed or executed.");
+    }
     public static CloudConfiguration ReadReference(string path)
     {
         try

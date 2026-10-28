@@ -77,6 +77,76 @@ internal static class RouterDiscovery
             0=>throw new RouterException("Could not find the selected router on the connected local networks. Check the connection and refresh; no cloud fallback or settings change was sent."),
             _=>throw new RouterException("Multiple addresses presented the selected router certificate. Automatic selection stopped; no credential was sent to the discovered addresses.")};
     }
+    public static string ConnectionFailure(System.Net.Http.HttpRequestException error, string address)
+    {
+        Exception? current = error;
+        for(var i=0; current is not null && i<8; i++,current=current.InnerException)
+        {
+            if(current is SocketException socket)
+                return socket.SocketErrorCode switch {
+                    SocketError.ConnectionRefused => $"{address}:50011 refused the connection. No management listener is reachable at that address; use Scan for ARRIS routers.",
+                    SocketError.NetworkUnreachable or SocketError.HostUnreachable => $"{address}:50011 is unreachable from this network. Check the Wi-Fi connection or scan the local subnet.",
+                    _ => $"Connection to {address}:50011 failed ({socket.SocketErrorCode})."
+                };
+            if(current is AuthenticationException)
+                return $"TLS verification failed at {address}:50011. The certificate must match the selected router's MAC and valid dates.";
+        }
+        return $"Connection to {address}:50011 failed ({error.HttpRequestError}). Use Scan for ARRIS routers to check the address.";
+    }
+    internal static async Task<RouterApiEndpoint?> ProbeApiAsync(string address, CancellationToken token)
+    {
+        if(!CredentialStore.IsPrivate(address)) return null;
+        using var timeout=CancellationTokenSource.CreateLinkedTokenSource(token);timeout.CancelAfter(TimeSpan.FromSeconds(3));
+        string? mac=null;
+        try
+        {
+            using(var socket=new TcpClient())
+            {
+                await socket.ConnectAsync(address,50011,timeout.Token);
+                using var ssl=new SslStream(socket.GetStream(),false,(_,cert,_,_)=>
+                {
+                    if(cert is null) return false;
+                    using var certificate=new X509Certificate2(cert);
+                    var name=certificate.GetNameInfo(X509NameType.SimpleName,false).ToUpperInvariant();
+                    if(!System.Text.RegularExpressions.Regex.IsMatch(name,"^[A-F0-9]{12}$") ||
+                       !certificate.Subject.Contains("ARRIS",StringComparison.OrdinalIgnoreCase) ||
+                       !CertificateMatches(certificate,name,DateTime.Now)) return false;
+                    mac=name;return true;
+                });
+                await ssl.AuthenticateAsClientAsync(new SslClientAuthenticationOptions{TargetHost=address},timeout.Token);
+            }
+            if(mac is null) return null;
+            // A certificate alone is not enough: make one fixed, anonymous, read-only API query.
+            using var wire=new LocalWire(new CredentialRecord("","",mac,address));
+            try
+            {
+                await wire.SendAsync("/getData?key=DEVICEOPERMODE_ALL",null,timeout.Token);
+                return new(address,mac,"OK");
+            }
+            catch(RouterException ex) when(ex.Code=="SessionTimeout") { return new(address,mac,"SessionTimeout"); }
+        }
+        catch(Exception ex) when(ex is SocketException or System.IO.IOException or AuthenticationException or System.Net.Http.HttpRequestException or OperationCanceledException or RouterException)
+        { token.ThrowIfCancellationRequested(); }
+        return null;
+    }
+    internal static async Task<List<RouterApiEndpoint>> DiscoverApisAsync(IEnumerable<string> addresses,
+        Func<string,CancellationToken,Task<RouterApiEndpoint?>> probe, IProgress<ScanProgress>? progress, CancellationToken token)
+    {
+        var candidates=addresses.Where(CredentialStore.IsPrivate).Distinct().Take(1024).ToArray();
+        var found=new ConcurrentBag<RouterApiEndpoint>();var count=0;
+        await Parallel.ForEachAsync(candidates,new ParallelOptions{MaxDegreeOfParallelism=24,CancellationToken=token},async(address,ct)=>
+        {
+            var endpoint=await probe(address,ct);
+            if(endpoint is not null) found.Add(endpoint);
+            progress?.Report(new(Interlocked.Increment(ref count),candidates.Length));
+        });
+        return found.OrderBy(r=>r.Address,StringComparer.Ordinal).ToList();
+    }
+    public static Task<List<RouterApiEndpoint>> DiscoverApisAsync(IEnumerable<string> addresses,IProgress<ScanProgress>? progress,CancellationToken token) =>
+        DiscoverApisAsync(addresses,ProbeApiAsync,progress,token);
     public static Task<string> ResolveAsync(CredentialRecord record,CancellationToken token)=>
         ResolveAsync(record.Address,record.Mac,Candidates(record.Address),MatchesAsync,token);
 }
+
+internal sealed record RouterApiEndpoint(string Address, string Mac, string Status);
+internal sealed record ScanProgress(int Checked, int Total);

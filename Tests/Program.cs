@@ -1,6 +1,14 @@
 using System.Security.Cryptography;
 using ArrisControl;
 
+if (args is ["--probe", var address])
+{
+    var results = await RouterDiscovery.DiscoverApisAsync([address], null, CancellationToken.None);
+    foreach (var endpoint in results) Console.WriteLine($"ARRIS API responds: {endpoint.Address}:50011 · {endpoint.Status}");
+    if (results.Count != 1) throw new InvalidOperationException("No matching ARRIS API responded.");
+    return;
+}
+
 await SelfTests.RunAsync();
 // Exercise authenticated envelope rejection independently of a router/cloud.
 var cipher = CredentialProtection.Protect([1, 2, 3], [4]);

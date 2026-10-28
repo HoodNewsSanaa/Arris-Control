@@ -289,7 +289,7 @@ internal sealed class RouterClient : IDisposable
         {
             try{var value=await ReadAsync(key,token);data[key]=value;reads.Add(new(key,200,"OK",DateTimeOffset.Now,true));rows.AddRange(Catalog.Flatten(value,key));}
             catch(RouterException ex){reads.Add(new(key,null,ex.Code.Length>0?ex.Code:ex.Message,DateTimeOffset.Now,false));if(ex.Code=="SessionTimeout"){authenticated=false;break;}}
-            catch(HttpRequestException){reads.Add(new(key,null,"Connection failed",DateTimeOffset.Now,false));}
+            catch(HttpRequestException ex){reads.Add(new(key,null,RouterDiscovery.ConnectionFailure(ex,record.Address),DateTimeOffset.Now,false));}
             catch(TaskCanceledException) when(!token.IsCancellationRequested){reads.Add(new(key,null,"Timed out",DateTimeOffset.Now,false));}
         }
         return new(page,data,reads,rows,DateTimeOffset.Now);

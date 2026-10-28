@@ -19,11 +19,11 @@ internal static class AndroidNetwork
     public static string Status()
     {
         var network = LocalNetwork;
-        if (network is null) return "No local Wi-Fi/Ethernet connection. Open Wi-Fi settings to join the router's network.";
+        if (network is null) return "Join your Arris Wi-Fi to use local control.";
         var caps = Manager.GetNetworkCapabilities(network);
-        var addresses = Manager.GetLinkProperties(network)?.LinkAddresses?.Select(a => a.Address?.HostAddress).Where(a => a is not null) ?? [];
-        return "Local network: " + string.Join(", ", addresses) + "\n" +
-            (caps?.HasCapability(NetCapability.Validated) == true ? "Internet available." : "Internet not validated. Local management is still allowed.");
+        var addresses = Manager.GetLinkProperties(network)?.LinkAddresses?.Select(a => a.Address?.HostAddress).Where(a => a is not null && CredentialStore.IsPrivate(a)) ?? [];
+        return "WI-FI / " + string.Join(", ", addresses) + "\n" +
+            (caps?.HasCapability(NetCapability.Validated) == true ? "Internet available · local control ready" : "No validated Internet · local control available");
     }
     public static IEnumerable<string> Candidates()
     {

@@ -68,6 +68,9 @@ internal static class CloudSelfTests
         {
             var java=Path.Combine(directory,"BuildConfig.java");File.WriteAllText(java,string.Join('\n',Names.Select((n,i)=>$"public static final String {n} = \"{Values[i]}\";")));
             Assert(CloudProtocol.ReadReference(java)==Config,"Java protocol constant extraction failed.");
+            var unsupported=Path.Combine(directory,"base.apk");
+            using(var baseFile=File.Create(unsupported))using(var archive=new ZipArchive(baseFile,ZipArchiveMode.Create))archive.CreateEntry("placeholder");
+            Assert(CloudProtocol.ReadReferences([unsupported,java])==Config,"Installed-reference fallback did not check later APK/split sources.");
             using var apkMemory=new MemoryStream();using(var apk=new ZipArchive(apkMemory,ZipArchiveMode.Create,true)){using var stream=apk.CreateEntry("classes.dex").Open();stream.Write(DexFixture());}
             var apkBytes=apkMemory.ToArray();var apkFile=Path.Combine(directory,"reference.apk");File.WriteAllBytes(apkFile,apkBytes);Assert(CloudProtocol.ReadReference(apkFile)==Config,"DEX protocol extraction failed.");
             var xapkFile=Path.Combine(directory,"reference.xapk");using(var file=File.Create(xapkFile))using(var zip=new ZipArchive(file,ZipArchiveMode.Create)){using var stream=zip.CreateEntry("com.arris.sbc.apk").Open();stream.Write(apkBytes);}

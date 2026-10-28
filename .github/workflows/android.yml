@@ -89,6 +89,7 @@ jobs:
           path: |
             artifacts/Arris-Control-android.apk
             artifacts/SHA256SUMS-android.txt
+            artifacts/Android-UI-preview.png
           if-no-files-found: error
           retention-days: 90
       - name: Publish Android preview download
@@ -97,7 +98,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: >-
           gh release create android-preview-${{ github.run_number }}
-          artifacts/Arris-Control-android.apk artifacts/SHA256SUMS-android.txt
+          artifacts/Arris-Control-android.apk artifacts/SHA256SUMS-android.txt artifacts/Android-UI-preview.png
           --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA"
           --title "Arris Control Android preview ${{ github.run_number }}"
           --notes-file Android/RELEASE-NOTES.md --prerelease --latest=false

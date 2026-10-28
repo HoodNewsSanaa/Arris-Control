@@ -2,6 +2,10 @@
 
 Install `Arris-Control-android.apk` from an **Android preview** on the repository's Releases page. Allow installation from your browser/file manager when Android prompts. Requires Android 8.0+ on ARM64; the APK also contains x86_64 for emulators. No root or separate .NET installation is needed.
 
+## Touchscreen interface
+
+The interface uses a black background, white text, large outlined controls, 60 dp minimum buttons and 64 dp option rows. Connection, discovery and saved routers have separate cards. Account setup and returned-field details expand when needed; settings keep Refresh and Connections actions within reach at the bottom. No teal or blue accents are used.
+
 ## Connect
 
 1. Join the Arris Wi-Fi (or the same local Ethernet network). If Android warns that Internet is unavailable, choose to stay connected.
@@ -14,6 +18,12 @@ Account passwords and cloud session tokens are not retained. Acquired local cred
 
 Windows DPAPI-encrypted JSON cannot be imported on Android. Android Keystore credentials are bound to this app installation; clearing app data or uninstalling loses them. Backups and screenshots are disabled. The firmware's certificate CN/MAC check is a consistency check, not independently verified public-PKI identity.
 
+## Find the router after an address change
+
+Use **Scan for ARRIS routers** on the connection screen. The app checks private IPv4 addresses on the currently connected Wi-Fi/Ethernet subnet at port 50011 (24 probes at a time, up to 1024 addresses, with large networks limited to the device's /24). It requires a currently valid ARRIS-labelled device certificate with a MAC-shaped common name, then checks the fixed management API without credentials. A `SessionTimeout` response confirms that the API is present and requires login. Select a result to fill the address; reconnection still verifies the saved certificate MAC and authenticated exact serial. Discovery is a consistency check, not public-PKI identity proof.
+
+The address field now applies to **saved-router reconnect** as well as account verification. Only a successfully authenticated address is persisted with the encrypted credential. Saved credentials do not require the SURFboard reference again. The installed-reference action runs off the UI thread, checks base and split APKs, and explains when the app is missing or its version does not expose the supported configuration.
+
 ## Features and limits
 
 The app shares the Windows protocol and settings engine: status, mesh/client fields, bridge/bypass ON/OFF, Wi-Fi names/passwords, guest settings, DNS, DHCP, UPnP, reservations/forwarding, priority/QoS, parental-control enable and LED state. Only fields returned by the unit's firmware have editors. All returned nonsecret fields appear below the forms. Settings require a preview confirmation, fresh identity/current-value checks, and a single write with read-back. A lost save reply is reported as unknown and never retried.
@@ -22,7 +32,7 @@ This does not implement factory onboarding, account recovery, MFA challenges, fi
 
 ## Build and verification
 
-GitHub Actions builds on `main`, `codex/android`, relevant PRs and manual dispatch. Push builds publish a separate Android prerelease without replacing the latest stable Windows release. The workflow runs shared offline regression tests, publishes the APK, launches it on an Android 15 x86_64 emulator, and runs those fixtures plus Android Keystore encryption/tamper tests inside the actual app. It uploads APK/checksum artifacts and publishes the tested APK on push.
+GitHub Actions builds on `main`, `codex/android`, relevant PRs and manual dispatch. Push builds publish a separate Android prerelease without replacing the latest stable Windows release. The workflow runs shared offline regression tests, publishes the APK, launches it on an Android 15 x86_64 emulator, and runs those fixtures plus Android Keystore encryption/tamper tests inside the actual app. It also runs an emulator-host HTTPS router fixture to verify anonymous API discovery, real login/session cookies, verified address changes and reconnect from an encrypted saved profile. It uploads APK/checksum/UI-preview artifacts and publishes the tested APK on push.
 
 Locally with .NET 10, JDK 21 and the Android SDK:
 

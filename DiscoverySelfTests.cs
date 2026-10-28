@@ -32,6 +32,19 @@ internal static class DiscoverySelfTests
             try{await RouterDiscovery.ResolveAsync("192.168.7.1","001122334455",["192.168.1.100"],(a,m,ct)=>Task.FromCanceled<bool>(ct),cancel.Token);}catch(OperationCanceledException){cancelled=true;}
             Check(cancelled,"Discovery cancellation was lost.");
         }
+        var scanned=new ConcurrentBag<string>();
+        Task<RouterApiEndpoint?> Probe(string a,CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();scanned.Add(a);
+            return Task.FromResult<RouterApiEndpoint?>(a=="192.168.1.104"?new(a,"001122334455","SessionTimeout"):null);
+        }
+        var apis=await RouterDiscovery.DiscoverApisAsync(["192.168.1.110","192.168.1.104","192.168.1.104","8.8.8.8"],Probe,null,default);
+        Check(apis.Count==1 && apis[0].Address=="192.168.1.104" && scanned.Count==2 && !scanned.Contains("8.8.8.8"),"API scan did not enforce private addresses and deduplication.");
+        scanned.Clear();
+        await RouterDiscovery.DiscoverApisAsync(Enumerable.Range(0,2000).Select(i=>$"10.0.{i/256}.{i%256}"),Probe,null,default);
+        Check(scanned.Count==1024,"API scan exceeded its host bound.");
+        var connectionError=new System.Net.Http.HttpRequestException(System.Net.Http.HttpRequestError.ConnectionError,"fictional",new System.Net.Sockets.SocketException((int)System.Net.Sockets.SocketError.ConnectionRefused));
+        Check(RouterDiscovery.ConnectionFailure(connectionError,"192.168.1.110").Contains("refused"),"Connection refusal was hidden by a generic error.");
         var folder=Path.Combine(Path.GetTempPath(),"discovery-test-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(folder);
         try
         {

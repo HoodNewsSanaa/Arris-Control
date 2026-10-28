@@ -18,6 +18,7 @@ public sealed class MainActivity : Activity
 {
     LinearLayout root = null!, content = null!;
     TextView status = null!, networkStatus = null!;
+    ProgressBar activityProgress = null!;
     EditText address = null!, email = null!, password = null!;
     CloudConfiguration? configuration;
     AcquiredCredential? acquired;
@@ -27,8 +28,6 @@ public sealed class MainActivity : Activity
     readonly List<Button> buttons = [];
     bool busy, dirty;
     const int ImportReference = 41;
-    readonly Color muted = Color.Rgb(165, 180, 201);
-    readonly Color accent = Color.Rgb(99, 217, 180);
 
     protected override void OnCreate(Bundle? state)
     {
@@ -44,7 +43,20 @@ public sealed class MainActivity : Activity
                 fixture[^1] ^= 1;
                 try { CredentialProtection.Unprotect(fixture, [4]); throw new InvalidOperationException("Tampered credential accepted."); }
                 catch (System.Security.Cryptography.CryptographicException) { }
-                status.Text = "PASS: offline protocol and Android Keystore checks.";
+                if (Intent?.GetBooleanExtra("networkSelfTest", false) == true)
+                {
+                    try { await RouterNetworkSelfTests.RunAsync(lifetime.Token); }
+                    catch (Exception ex) { Android.Util.Log.Error("ArrisControlSelfTest", ex.ToString()); throw; }
+                    status.Text = "PASS: Android API scan, HTTPS login and reconnect.";
+                    if (root.Width > 0 && root.Height > 0)
+                    {
+                        using var bitmap = Android.Graphics.Bitmap.CreateBitmap(root.Width, root.Height, Android.Graphics.Bitmap.Config.Argb8888!)!;
+                        using var canvas = new Android.Graphics.Canvas(bitmap); root.Draw(canvas);
+                        using var output = File.Create(Path.Combine(CacheDir!.AbsolutePath, "ui-preview.png"));
+                        bitmap.Compress(Android.Graphics.Bitmap.CompressFormat.Png!, 100, output);
+                    }
+                }
+                else status.Text = "PASS: offline protocol and Android Keystore checks.";
             });
     }
     protected override void OnResume()
@@ -61,58 +73,104 @@ public sealed class MainActivity : Activity
     TextView Label(string text, int size = 15, bool heading = false)
     {
         var view = new TextView(this) { Text = text, TextSize = size };
-        view.SetTextColor(heading ? Color.White : muted);
-        view.SetPadding(0, Dp(heading ? 12 : 5), 0, Dp(7));
+        view.SetTextColor(Color.White);
+        view.SetTypeface(Android.Graphics.Typeface.Create(heading ? "sans-serif-medium" : "sans-serif", Android.Graphics.TypefaceStyle.Normal), Android.Graphics.TypefaceStyle.Normal);
+        view.SetLineSpacing(Dp(2), 1.12f);
+        view.SetPadding(0, Dp(heading ? 4 : 3), 0, Dp(heading ? 12 : 8));
         return view;
     }
     LinearLayout Column() => new(this) { Orientation = Orientation.Vertical };
+    Android.Graphics.Drawables.GradientDrawable Surface(int stroke = 1)
+    {
+        var shape = new Android.Graphics.Drawables.GradientDrawable();
+        shape.SetColor(Color.Black); shape.SetCornerRadius(Dp(16));
+        shape.SetStroke(Dp(stroke), Color.Rgb(70,70,70)); return shape;
+    }
+    LinearLayout Card(string title, string? description = null, LinearLayout? parent = null)
+    {
+        var box = Column(); box.Background = Surface(); box.SetPadding(Dp(18), Dp(18), Dp(18), Dp(18));
+        var layout = new LinearLayout.LayoutParams(-1, -2); layout.BottomMargin = Dp(18);
+        (parent ?? content).AddView(box, layout);
+        box.AddView(Label(title, 21, true));
+        if (!string.IsNullOrEmpty(description)) box.AddView(Label(description, 14));
+        return box;
+    }
     void Shell(string subtitle)
     {
         buttons.Clear();
-        root = Column(); root.SetBackgroundColor(Color.Rgb(16, 23, 36));
-        root.SetPadding(Dp(20), Dp(18), Dp(20), Dp(14)); root.SetFitsSystemWindows(true);
-        root.AddView(Label("ARRIS CONTROL", 12));
-        root.AddView(Label(subtitle, 27, true));
+        root = Column(); root.SetBackgroundColor(Color.Black); root.FocusableInTouchMode = true; root.RequestFocus();
+        root.SetPadding(Dp(20), Dp(18), Dp(20), Dp(12)); root.SetFitsSystemWindows(true);
+        var brand = Label("ARRIS / CONTROL", 11); brand.LetterSpacing = 0.18f; root.AddView(brand);
+        root.AddView(Label(subtitle, 32, true));
         networkStatus = Label(AndroidNetwork.Status(), 12); root.AddView(networkStatus);
-        status = Label("", 13); status.SetTextColor(accent); root.AddView(status);
+        status = Label("", 13); status.SetTextColor(Color.White); root.AddView(status);
+        activityProgress = new ProgressBar(this, null, Android.Resource.Attribute.ProgressBarStyleHorizontal) { Indeterminate = true, Visibility = busy ? ViewStates.Visible : ViewStates.Gone };
+        activityProgress.IndeterminateTintList = Android.Content.Res.ColorStateList.ValueOf(Color.White);
+        root.AddView(activityProgress, new LinearLayout.LayoutParams(-1, Dp(2)));
         var scroll = new ScrollView(this) { FillViewport = true };
-        content = Column(); scroll.AddView(content);
+        scroll.ClipToPadding = false;
+        content = Column(); content.SetPadding(0, Dp(8), 0, Dp(18)); scroll.AddView(content);
         root.AddView(scroll, new LinearLayout.LayoutParams(-1, 0, 1)); SetContentView(root);
     }
     Button Action(LinearLayout parent, string text, Func<Task> action)
     {
-        var button = new Button(this) { Text = text };
-        button.SetAllCaps(false); button.SetTextColor(accent); button.Click += async (_, _) => { if (!busy) await Run(action); };
-        buttons.Add(button); parent.AddView(button, new LinearLayout.LayoutParams(-1, Dp(52)));
-        return button;
+        var button = new Button(this) { Text = text, TextSize = 16, Gravity = GravityFlags.Center };
+        button.SetAllCaps(false); button.SetTextColor(Color.White); button.Background = new Android.Graphics.Drawables.RippleDrawable(Android.Content.Res.ColorStateList.ValueOf(Color.Argb(45,255,255,255)), Surface(), null);
+        button.SetTypeface(Android.Graphics.Typeface.Create("sans-serif-medium", Android.Graphics.TypefaceStyle.Normal), Android.Graphics.TypefaceStyle.Normal);
+        button.SetPadding(Dp(16), Dp(8), Dp(16), Dp(8)); button.SetMinHeight(Dp(60));
+        if (Build.VERSION.SdkInt >= BuildVersionCodes.O) button.TooltipText = text.Replace("\n", " · ");
+        button.Click += async (_, _) => { if (!busy) await Run(action); };
+        var layout = new LinearLayout.LayoutParams(-1, -2) { TopMargin = Dp(8), BottomMargin = Dp(4) };
+        buttons.Add(button); parent.AddView(button, layout); return button;
     }
     EditText Input(LinearLayout parent, string label, string text = "", bool secret = false)
     {
         parent.AddView(Label(label, 13));
-        var field = new EditText(this) { Text = text, TextSize = 16,
+        var field = new EditText(this) { Text = text, TextSize = 18,
             InputType = secret ? InputTypes.ClassText | InputTypes.TextVariationPassword : InputTypes.ClassText | InputTypes.TextFlagNoSuggestions };
-        field.SetSingleLine(true); field.SetTextColor(Color.White); field.SetSelectAllOnFocus(true); field.SaveEnabled = false;
+        field.SetSingleLine(true); field.SetTextColor(Color.White); field.SetHintTextColor(Color.White);
+        field.Background = Surface(); field.SetPadding(Dp(16), Dp(14), Dp(16), Dp(14)); field.SetMinHeight(Dp(60));
+        field.SetSelectAllOnFocus(true); field.SaveEnabled = false;
         if (Build.VERSION.SdkInt >= BuildVersionCodes.O) field.ImportantForAutofill = ImportantForAutofill.NoExcludeDescendants;
-        parent.AddView(field); return field;
+        var layout = new LinearLayout.LayoutParams(-1, -2) { BottomMargin = Dp(14) };
+        parent.AddView(field, layout); return field;
+    }
+    async Task<int> Choose(string title, string[] items)
+    {
+        var answer = new TaskCompletionSource<int>();
+        var dialog = new AlertDialog.Builder(this)!.SetTitle(title)!
+            .SetAdapter(new TouchChoices(this, items), (_, args) => answer.TrySetResult(args.Which))!
+            .SetNegativeButton("Cancel", (_, _) => answer.TrySetResult(-1))!.Create()!;
+        dialog.CancelEvent += (_, _) => answer.TrySetResult(-1); dialog.Show(); return await answer.Task;
+    }
+    sealed class TouchChoices(Activity owner, string[] items) : ArrayAdapter<string>(owner, Android.Resource.Layout.SimpleListItem1, items)
+    {
+        public override View GetView(int position, View? convertView, ViewGroup parent)
+        {
+            var view = (TextView)base.GetView(position, convertView, parent);
+            var density = owner.Resources!.DisplayMetrics!.Density;
+            view.SetMinHeight((int)(64 * density)); view.SetPadding((int)(24 * density), (int)(14 * density), (int)(24 * density), (int)(14 * density));
+            view.TextSize = 17; view.SetTextColor(Color.White); view.SetSingleLine(false); return view;
+        }
     }
     async Task Run(Func<Task> action)
     {
         if (busy) return;
-        busy = true; foreach (var b in buttons) b.Enabled = false;
+        busy = true; activityProgress.Visibility = ViewStates.Visible; foreach (var b in buttons) b.Enabled = false;
         try { await action(); }
         catch (System.OperationCanceledException) { if (!IsDestroyed) status.Text = "Operation cancelled."; }
         catch (Exception ex)
         {
             if (IsDestroyed) return;
             status.Text = ex is RouterException ? ex.Message :
-                ex is System.Net.Http.HttpRequestException ? "Connection failed. Check the local network, router address, and device identity." :
+                ex is System.Net.Http.HttpRequestException requestFailure ? RouterDiscovery.ConnectionFailure(requestFailure, address?.Text ?? "the selected router") :
                 "The operation could not complete. No success was assumed. Check your connection and try again.";
             await Message("Operation result", status.Text ?? "Operation failed.");
         }
         finally
         {
             busy = false;
-            if (!IsDestroyed) { foreach (var b in buttons) b.Enabled = true; networkStatus.Text = AndroidNetwork.Status(); }
+            if (!IsDestroyed) { activityProgress.Visibility = ViewStates.Gone; foreach (var b in buttons) b.Enabled = true; networkStatus.Text = AndroidNetwork.Status(); }
         }
     }
     Task<bool> Confirm(string title, string body, string accept = "Apply change")
@@ -133,35 +191,40 @@ public sealed class MainActivity : Activity
     async Task<bool> Discard() => !dirty || await Confirm("Unsaved changes", "Discard the edits on this page?", "Discard");
     void ShowConnect()
     {
-        Shell("Your router. Locally."); dirty = false;
-        content.AddView(Label("Connect to your Arris network. Saved local credentials work without Internet when the router's management API is reachable."));
-        Action(content, "Open Wi-Fi settings", () => { StartActivity(new Intent(Android.Provider.Settings.ActionWifiSettings)); return Task.CompletedTask; });
+        Shell("Connect to ARRIS"); dirty = false;
+        var connection = Card("Find your ARRIS", "Join its Wi-Fi, then scan to find its current address.");
+        Action(connection, "Wi-Fi settings", () => { StartActivity(new Intent(Android.Provider.Settings.ActionWifiSettings)); return Task.CompletedTask; });
         var records = CredentialStore.Find();
+        var lastAddress = GetSharedPreferences("connection", FileCreationMode.Private)!.GetString("address", records.FirstOrDefault()?.Address ?? "192.168.7.1")!;
+        address = Input(connection, "Router address", lastAddress);
+        Action(connection, "Scan for ARRIS routers", ScanRouters);
         if (records.Count > 0)
         {
-            content.AddView(Label("Saved routers", 20, true));
-            foreach (var record in records) Action(content, record.ToString(), () => Connect(record));
+            var saved = Card("Saved routers", "Reconnect locally. No account sign-in or reference import needed.");
+            foreach (var record in records) Action(saved, "Connect to router\n" + record.Serial, () => Connect(record, address.Text!.Trim()));
         }
-        address = Input(content, "Router IPv4 address", "192.168.7.1");
-        content.AddView(Label("Sign in through your ARRIS account", 20, true));
-        content.AddView(Label("One-time account sign-in retrieves your existing local router credential. Account passwords and cloud tokens are never saved."));
-        email = Input(content, "ARRIS account email"); email.InputType = InputTypes.ClassText | InputTypes.TextVariationEmailAddress;
-        password = Input(content, "ARRIS account password", secret: true);
-        Action(content, "Use installed SURFboard Central reference", LoadInstalledReference);
-        Action(content, "Import protocol reference (APK / XAPK / Java)", () =>
+        var setup = Card("First-time setup", "Use this once to acquire a local router login.");
+        var account = Column();
+        Action(setup, "ARRIS account sign-in", () => { account.Visibility = account.Visibility == ViewStates.Gone ? ViewStates.Visible : ViewStates.Gone; return Task.CompletedTask; });
+        setup.AddView(account); account.Visibility = ViewStates.Gone;
+        account.AddView(Label("Account passwords and cloud tokens are not saved.", 13));
+        email = Input(account, "ARRIS account email"); email.InputType = InputTypes.ClassText | InputTypes.TextVariationEmailAddress;
+        password = Input(account, "ARRIS account password", secret: true);
+        Action(account, "Use installed SURFboard Central reference", LoadInstalledReference);
+        Action(account, "Choose a reference file", () =>
         {
             var intent = new Intent(Intent.ActionOpenDocument); intent.SetType("*/*"); intent.AddCategory(Intent.CategoryOpenable);
             StartActivityForResult(intent, ImportReference); return Task.CompletedTask;
         });
-        Action(content, "Sign in and find my routers", Acquire);
-        Action(content, "Use previously acquired account credential", async () =>
+        Action(account, "Sign in and find my routers", Acquire);
+        Action(setup, "Use previously acquired credential", async () =>
         {
             if (!Directory.Exists(AcquisitionStore.Folder)) throw new RouterException("No account credential is saved on this installation yet.");
             var file = Directory.EnumerateFiles(AcquisitionStore.Folder, "account-*.json").OrderDescending().FirstOrDefault()
                 ?? throw new RouterException("No saved account credential was found.");
             acquired = await Task.Run(() => AcquisitionStore.Load(file), lifetime.Token); ShowDevices();
         });
-        Action(content, "Enter an existing local management credential", async () =>
+        Action(setup, "Enter a local management login", async () =>
         {
             var form = Column(); form.SetPadding(Dp(20), Dp(4), Dp(20), Dp(4));
             var serial = Input(form, "Router serial number"); var mac = Input(form, "Router certificate MAC address");
@@ -178,13 +241,39 @@ public sealed class MainActivity : Activity
             var device = new CloudDevice("ARRIS mAX", id, hardware); acquired = new(credential, [device]);
             await Verify(device);
         });
-        content.AddView(Label("Windows credential JSON files use DPAPI and cannot be decrypted on Android. Acquire the local login again on this phone. Factory onboarding and account recovery use the vendor app.", 12));
+        content.AddView(Label("Local control · credentials encrypted on this phone", 12));
     }
-    Task LoadInstalledReference()
+    async Task ScanRouters()
     {
-        var app = PackageManager!.GetApplicationInfo("com.arris.sbc", PackageInfoFlags.MetaData)!;
-        configuration = CloudProtocol.ReadReference(app.SourceDir!); CloudProtocol.Save(configuration);
-        status.Text = "Protocol reference imported and encrypted on this phone."; return Task.CompletedTask;
+        AndroidNetwork.UseLocal();
+        status.Text = "Scanning your local network…";
+        var candidates = AndroidNetwork.Candidates().Distinct().Take(1024).ToArray();
+        var progress = new Progress<ScanProgress>(p => status.Text = $"Checking ARRIS APIs: {p.Checked}/{p.Total} addresses…");
+        var results = await RouterDiscovery.DiscoverApisAsync(candidates, progress, lifetime.Token);
+        if (results.Count == 0)
+        {
+            await Message("No ARRIS API found", "No matching ARRIS HTTPS API responded on this connected subnet. Check the Wi-Fi connection, client isolation, and the unit's power/cabling. The scan sends no credentials.");
+            return;
+        }
+        var selected = await Choose("ARRIS routers found", results.Select(r => r.Address + "\nAPI responds · " + r.Mac).ToArray());
+        if (selected >= 0)
+        {
+            address.Text = results[selected].Address;
+            status.Text = "Router address selected. Choose a saved router to connect.";
+        }
+    }
+    async Task LoadInstalledReference()
+    {
+        Android.Content.PM.ApplicationInfo app;
+        try { app = PackageManager!.GetApplicationInfo("com.arris.sbc", PackageInfoFlags.MetaData)!; }
+        catch (Android.Content.PM.PackageManager.NameNotFoundException)
+        { throw new RouterException("SURFboard Central is not installed in this Android profile. Use Import protocol reference with your own SURFboard Central 4.3.5 APK/XAPK or BuildConfig.java. A reference is not needed to reconnect with saved local credentials."); }
+        var paths = new[] { app.SourceDir }.Concat(app.SplitSourceDirs ?? []).Where(p => !string.IsNullOrEmpty(p)).Select(p => p!).ToArray();
+        status.Text = "Reading the installed app's APK and split references…";
+        configuration = await Task.Run(() => CloudProtocol.ReadReferences(paths), lifetime.Token);
+        CloudProtocol.Save(configuration);
+        status.Text = "Protocol reference imported and encrypted on this phone.";
+        await Message("Reference imported", "The supported protocol reference is ready for account sign-in. Saved local credentials do not need this step.");
     }
     protected override void OnActivityResult(int requestCode, Result resultCode, Intent? data)
     {
@@ -247,29 +336,35 @@ public sealed class MainActivity : Activity
         var record = await CloudAcquisition.VerifyAndSaveAsync(acquired!, device, address.Text!.Trim(), lifetime.Token);
         acquired = null; await Connect(record);
     }
-    async Task Connect(CredentialRecord record)
+    async Task Connect(CredentialRecord record, string? addressOverride = null)
     {
+        if (!string.IsNullOrEmpty(addressOverride))
+        {
+            if (!CredentialStore.IsPrivate(addressOverride)) throw new RouterException("Enter a private IPv4 address or use Scan for ARRIS routers.");
+            record = record with { Address = addressOverride };
+        }
         status.Text = "Connecting to " + record.Address + "…"; client?.Dispose(); client = new(record);
         client.Progress = message => RunOnUiThread(() => { if (!IsDestroyed) status.Text = message; });
         await Task.Run(() => client.ConnectAsync(lifetime.Token), lifetime.Token); dirty = false;
+        GetSharedPreferences("connection", FileCreationMode.Private)!.Edit()!.PutString("address", client.Record.Address)!.Apply();
         currentPage = Catalog.Pages[0]; ShowRouter(); await Read();
     }
     void ShowRouter()
     {
-        Shell("Router settings");
-        content.AddView(Label(client!.Record.ToString(), 12));
-        var picker = new Spinner(this);
-        picker.Adapter = new ArrayAdapter<string>(this, Android.Resource.Layout.SimpleSpinnerDropDownItem, Catalog.Pages.Select(p => p.Name).ToArray());
-        picker.SetSelection(Array.IndexOf(Catalog.Pages, currentPage));
-        picker.ItemSelected += async (_, args) =>
+        Shell(currentPage.Name);
+        var navigation = Card("Connected locally", client!.Record.Address + " · " + client.Record.Serial);
+        Action(navigation, "Change section  ⌄", async () =>
         {
-            if (busy || Catalog.Pages[args.Position] == currentPage) return;
-            if (!await Discard()) { picker.SetSelection(Array.IndexOf(Catalog.Pages, currentPage)); return; }
-            currentPage = Catalog.Pages[args.Position]; dirty = false; await Run(async () => { ShowRouter(); await Read(); });
-        };
-        content.AddView(picker);
-        Action(content, "Refresh this page", async () => { if (await Discard()) { dirty = false; ShowRouter(); await Read(); } });
-        Action(content, "Switch router / credentials", async () => { if (await Discard()) { client?.Dispose(); client = null; AndroidNetwork.UseInternet(); ShowConnect(); } });
+            var selected = await Choose("Router settings", Catalog.Pages.Select(p => p.Name).ToArray());
+            if (selected < 0 || Catalog.Pages[selected] == currentPage || !await Discard()) return;
+            currentPage = Catalog.Pages[selected]; dirty = false; ShowRouter(); await Read();
+        });
+        var bottom = new LinearLayout(this) { Orientation = Orientation.Horizontal };
+        root.AddView(bottom);
+        var refresh = Action(bottom, "Refresh", async () => { if (await Discard()) { dirty = false; ShowRouter(); await Read(); } });
+        refresh.LayoutParameters = new LinearLayout.LayoutParams(0, Dp(60), 1) { RightMargin = Dp(6) };
+        var connections = Action(bottom, "Connections", async () => { if (await Discard()) { client?.Dispose(); client = null; AndroidNetwork.UseInternet(); ShowConnect(); } });
+        connections.LayoutParameters = new LinearLayout.LayoutParams(0, Dp(60), 1) { LeftMargin = Dp(6) };
     }
     async Task Read()
     {
@@ -278,11 +373,12 @@ public sealed class MainActivity : Activity
         dirty = false; content.AddView(Label(currentPage.Description.Replace("this PC", "this phone")));
         if ((currentPage.Id is "overview" or "internet") && snapshot.Data.TryGetValue("DEVICEOPERMODE_ALL", out var modes) && modes["DEVICEOPERMODE"] is JsonObject mode)
         {
-            var value = Catalog.Text(mode["MODE"]); content.AddView(Label("Bypass / bridge mode: " + value, 20, true));
+            var value = Catalog.Text(mode["MODE"]);
+            var bridge = Card("Bypass mode", value == "BRIDGE" ? "On · routing is handled by your main router." : "Off · this unit handles routing.");
             var definition = Settings.Definitions.Single(d => d.Container == "DEVICEOPERMODE");
             var section = new SettingSection(definition, "DEVICEOPERMODE", 0, "", Settings.Filter(definition, mode), "Bypass mode");
-            if (value is "DUAL" or "IPV4ONLY") Action(content, "Turn bypass ON", () => Save(section, new() { ["MODE"] = () => "BRIDGE" }));
-            if (value == "BRIDGE") Action(content, "Turn bypass OFF · restore router mode", () => Save(section, new() { ["MODE"] = () => "DUAL" }));
+            if (value is "DUAL" or "IPV4ONLY") Action(bridge, "Turn bypass ON", () => Save(section, new() { ["MODE"] = () => "BRIDGE" }));
+            if (value == "BRIDGE") Action(bridge, "Turn bypass OFF · restore router mode", () => Save(section, new() { ["MODE"] = () => "DUAL" }));
         }
         foreach (var section in Settings.Sections(snapshot)) Editor(section);
         foreach (var definition in Settings.Definitions.Where(d => d.Collection && snapshot.Data.ContainsKey(d.Key)))
@@ -291,16 +387,18 @@ public sealed class MainActivity : Activity
                 Editor(new(definition, definition.Container, -1, "", new JsonObject(), "New " + definition.Title), true);
                 return Task.CompletedTask;
             });
-        content.AddView(Label("Returned fields", 20, true));
+        var details = Card("Details", "Read-only fields returned by this firmware.");
         var fields = Label(string.Join("\n\n", snapshot.Rows.Select(row => row.Field + "\n" + row.Value)), 13);
-        fields.SetTextIsSelectable(true); content.AddView(fields);
+        fields.SetTextIsSelectable(true); fields.Visibility = ViewStates.Gone;
+        Action(details, "Show returned fields", () => { fields.Visibility = fields.Visibility == ViewStates.Gone ? ViewStates.Visible : ViewStates.Gone; return Task.CompletedTask; });
+        details.AddView(fields);
         var failed = snapshot.Reads.Where(r => !r.Readable).Select(r => r.Key + ": " + r.Status).ToArray();
         if (failed.Length > 0) content.AddView(Label("Unavailable reads\n" + string.Join("\n", failed), 12));
         status.Text = $"{snapshot.Reads.Count(r => r.Readable)}/{snapshot.Reads.Count} queries read · {snapshot.Time:HH:mm:ss}.";
     }
     void Editor(SettingSection section, bool adding = false)
     {
-        content.AddView(Label(section.Title, 20, true));
+        var editor = Card(section.Title);
         var getters = new Dictionary<string, Func<string>>();
         foreach (var field in section.Definition.Fields)
         {
@@ -310,27 +408,30 @@ public sealed class MainActivity : Activity
             {
                 var toggle = new Switch(this) { Text = field.Label, Checked = old == "1", TextSize = 15 };
                 toggle.SetPadding(0, Dp(10), 0, Dp(10)); toggle.CheckedChange += (_, _) => dirty = true;
-                content.AddView(toggle); getters[field.Key] = () => toggle.Checked ? "1" : "0";
+                toggle.SetMinHeight(Dp(60)); toggle.SetTextColor(Color.White); editor.AddView(toggle); getters[field.Key] = () => toggle.Checked ? "1" : "0";
             }
             else if (field.Kind == "choice")
             {
-                content.AddView(Label(field.Label, 13)); var picker = new Spinner(this);
-                var choices = field.Choices!;
-                if (!choices.Any(c => c.Value == old)) choices = [new Choice(old, "Current: " + (old.Length == 0 ? "choose a value" : old)), .. choices];
-                picker.Adapter = new ArrayAdapter<string>(this, Android.Resource.Layout.SimpleSpinnerDropDownItem, choices.Select(c => c.Label).ToArray());
-                picker.SetSelection(Array.FindIndex(choices, c => c.Value == old));
-                var initial = true; picker.ItemSelected += (_, _) => { if (initial) initial = false; else dirty = true; };
-                content.AddView(picker); getters[field.Key] = () => choices[picker.SelectedItemPosition].Value;
+                var choices = field.Choices!; var selected = old;
+                string Caption() => field.Label + "\n" + (choices.FirstOrDefault(c => c.Value == selected)?.Label ?? "Choose a value");
+                Button? choice = null;
+                choice = Action(editor, Caption(), async () =>
+                {
+                    var index = await Choose(field.Label, choices.Select(c => c.Label).ToArray());
+                    if (index < 0) return;
+                    selected = choices[index].Value; choice!.Text = Caption(); dirty = true;
+                });
+                getters[field.Key] = () => selected;
             }
             else
             {
-                var input = Input(content, field.Label, field.Kind == "password" ? "" : old, field.Kind == "password");
+                var input = Input(editor, field.Label, field.Kind == "password" ? "" : old, field.Kind == "password");
                 input.TextChanged += (_, _) => dirty = true; getters[field.Key] = () => input.Text ?? "";
-                if (field.Hint.Length > 0) content.AddView(Label(field.Hint, 12));
+                if (field.Hint.Length > 0) editor.AddView(Label(field.Hint, 12));
             }
         }
-        Action(content, adding ? "Review new rule" : "Review changes", () => Save(section, getters, adding ? "ADD" : "MODIFY"));
-        if (section.Definition.Collection && !adding) Action(content, "Remove rule", () => Save(section, [], "DELETE"));
+        Action(editor, adding ? "Review new rule" : "Review changes", () => Save(section, getters, adding ? "ADD" : "MODIFY"));
+        if (section.Definition.Collection && !adding) Action(editor, "Remove rule", () => Save(section, [], "DELETE"));
     }
     async Task Save(SettingSection section, Dictionary<string, Func<string>> getters, string operation = "MODIFY")
     {
