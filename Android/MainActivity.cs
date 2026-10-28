@@ -50,10 +50,15 @@ public sealed class MainActivity : Activity
                     status.Text = "PASS: Android API scan, HTTPS login and reconnect.";
                     if (root.Width > 0 && root.Height > 0)
                     {
+                        var resultText = status.Text; status.Text = ""; activityProgress.Visibility = ViewStates.Gone;
+                        foreach (var button in buttons) button.Enabled = true;
+                        root.Measure(View.MeasureSpec.MakeMeasureSpec(root.Width, MeasureSpecMode.Exactly), View.MeasureSpec.MakeMeasureSpec(root.Height, MeasureSpecMode.Exactly));
+                        root.Layout(root.Left, root.Top, root.Right, root.Bottom);
                         using var bitmap = Android.Graphics.Bitmap.CreateBitmap(root.Width, root.Height, Android.Graphics.Bitmap.Config.Argb8888!)!;
                         using var canvas = new Android.Graphics.Canvas(bitmap); root.Draw(canvas);
                         using var output = File.Create(Path.Combine(CacheDir!.AbsolutePath, "ui-preview.png"));
                         bitmap.Compress(Android.Graphics.Bitmap.CompressFormat.Png!, 100, output);
+                        status.Text = resultText;
                     }
                 }
                 else status.Text = "PASS: offline protocol and Android Keystore checks.";
@@ -99,7 +104,7 @@ public sealed class MainActivity : Activity
     {
         buttons.Clear();
         root = Column(); root.SetBackgroundColor(Color.Black); root.FocusableInTouchMode = true; root.RequestFocus();
-        root.SetPadding(Dp(20), Dp(18), Dp(20), Dp(12)); root.SetFitsSystemWindows(true);
+        root.SetPadding(Dp(20), Dp(18), Dp(20), Dp(12));
         var brand = Label("ARRIS / CONTROL", 11); brand.LetterSpacing = 0.18f; root.AddView(brand);
         root.AddView(Label(subtitle, 32, true));
         networkStatus = Label(AndroidNetwork.Status(), 12); root.AddView(networkStatus);
@@ -110,7 +115,9 @@ public sealed class MainActivity : Activity
         var scroll = new ScrollView(this) { FillViewport = true };
         scroll.SetClipToPadding(false);
         content = Column(); content.SetPadding(0, Dp(8), 0, Dp(18)); scroll.AddView(content);
-        root.AddView(scroll, new LinearLayout.LayoutParams(-1, 0, 1)); SetContentView(root);
+        root.AddView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        var windowContent = new FrameLayout(this); windowContent.SetBackgroundColor(Color.Black); windowContent.SetFitsSystemWindows(true);
+        windowContent.AddView(root, new FrameLayout.LayoutParams(-1, -1)); SetContentView(windowContent);
     }
     Button Action(LinearLayout parent, string text, Func<Task> action)
     {
@@ -228,10 +235,11 @@ public sealed class MainActivity : Activity
         Action(setup, "Enter a local management login", async () =>
         {
             var form = Column(); form.SetPadding(Dp(20), Dp(4), Dp(20), Dp(4));
+            var formScroll = new ScrollView(this); formScroll.AddView(form);
             var serial = Input(form, "Router serial number"); var mac = Input(form, "Router certificate MAC address");
             var user = Input(form, "Local management username / email"); var pass = Input(form, "Local management password (not Wi-Fi password)", secret: true);
             var done = new TaskCompletionSource<bool>();
-            var dialog = new AlertDialog.Builder(this)!.SetTitle("Existing local credential")!.SetView(form)!
+            var dialog = new AlertDialog.Builder(this)!.SetTitle("Existing local credential")!.SetView(formScroll)!
                 .SetPositiveButton("Verify", (_, _) => done.TrySetResult(true))!.SetNegativeButton("Cancel", (_, _) => done.TrySetResult(false))!.Create()!;
             dialog.CancelEvent += (_, _) => done.TrySetResult(false); dialog.Show();
             if (!await done.Task) return;

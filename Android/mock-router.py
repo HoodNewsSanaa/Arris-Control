@@ -35,7 +35,19 @@ class RouterFixture:
                 # No setting modifications exist in this fixture.
                 if self.path != '/loginAction':
                     raise AssertionError('Unexpected modifying request')
-                body = self.rfile.read(int(self.headers.get('Content-Length', 0)))
+                if 'chunked' in self.headers.get('Transfer-Encoding', '').lower():
+                    chunks = []
+                    while True:
+                        size = int(self.rfile.readline().split(b';', 1)[0], 16)
+                        if size == 0:
+                            while self.rfile.readline().strip():
+                                pass
+                            break
+                        chunks.append(self.rfile.read(size))
+                        self.rfile.read(2)
+                    body = b''.join(chunks)
+                else:
+                    body = self.rfile.read(int(self.headers.get('Content-Length', 0)))
                 expected = base64.b64encode(b'test%40example.com:FictionalLocalPassword123!')
                 if not body.startswith(b'arg=' + expected + b'&'):
                     self.reply({'STATUS': 'IncorrectCredentials'})

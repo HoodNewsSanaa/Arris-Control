@@ -39,7 +39,8 @@ for _ in range(45):
         adb('pull', '/data/user/0/com.hoodnewssanaa.arriscontrol/cache/ui-preview.png', 'artifacts/Android-UI-preview.png')
         break
     logs = adb('logcat', '-d')
-    if 'FATAL EXCEPTION' in logs or 'FATAL UNHANDLED EXCEPTION' in logs or 'Operation result' in ui:
+    app_crashed = any('AndroidRuntime' in line and 'Process: com.hoodnewssanaa.arriscontrol,' in line for line in logs.splitlines())
+    if app_crashed or 'Operation result' in ui:
         Path('artifacts/android-smoke.log').write_text(logs)
         print('Fixture counters:', fixture.logins, fixture.anonymous_reads, fixture.protected_reads)
         print(adb('logcat', '-d', '-s', 'ArrisControlSelfTest:E', 'AndroidRuntime:E', 'DOTNET:I'))

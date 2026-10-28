@@ -15,11 +15,13 @@ internal static class RouterNetworkSelfTests
             throw new InvalidOperationException("Anonymous ARRIS API discovery failed against the TLS fixture.");
         var directory=Path.Combine(Path.GetTempPath(),"router-network-test-"+Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
-        string? updatedPath=null;
+        string? updatedPath=null, preservedPath=null;
         try
         {
             var device=new CloudDevice("Fixture mAX","TESTSERIAL123",mac);
             var saved=CredentialStore.SaveVerified(new("test@example.com","FictionalLocalPassword123!"),device,"10.0.2.3",directory);
+            var hash=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(saved.Path)));
+            preservedPath=Path.Combine(CredentialStore.UserDirectory,$"loaded-{saved.Serial}-{saved.Mac}-{hash}.json");
             // This is the same address override the Android saved-router action now supplies.
             using(var first=new RouterClient(saved with { Address=host }))
             {
@@ -43,6 +45,7 @@ internal static class RouterNetworkSelfTests
         finally
         {
             if(updatedPath is not null && File.Exists(updatedPath)) File.Delete(updatedPath);
+            if(preservedPath is not null && File.Exists(preservedPath)) File.Delete(preservedPath);
             foreach(var path in Directory.EnumerateFiles(directory)) File.Delete(path);
             Directory.Delete(directory);
         }
