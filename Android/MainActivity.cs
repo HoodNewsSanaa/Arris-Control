@@ -291,6 +291,13 @@ public sealed class MainActivity : Activity
                 chipText: records.Count == 1 ? "Saved" : records.Count + " saved", chipColor: Palette.Success);
             foreach (var record in records) Action(saved, "Connect\n" + record.Serial, () => Connect(record, AddressOverride()), Tone.Primary);
         }
+        var pendingSetups = OfflineSetupStore.Find();
+        if (pendingSetups.Count > 0)
+        {
+            var pending = Card("Pending offline setup", "Join the router's Wi-Fi, then verify the proposed login locally. No ARRIS sign-in needed.");
+            foreach (var entry in pendingSetups.DistinctBy(x => x.Draft.Device.Serial))
+                Action(pending, "Verify local login\n" + entry.Draft.Device.Serial, () => { ShowOfflineVerification(entry.Path, entry.Draft); return Task.CompletedTask; }, Tone.Primary);
+        }
         var account = Card(records.Count > 0 ? "Add another router" : "Sign in to get started",
             "Use your ARRIS / SURFboard Central account. The app finds your router on this Wi-Fi and connects. Your password isn't saved.");
         email = Input(account, "Account email", prefs.GetString("email", "") ?? "");
@@ -518,7 +525,7 @@ public sealed class MainActivity : Activity
         var next = Card("What next");
         Action(next, "Guided setup (experimental)", () => BleGuidedSetup(serial, mac, model), Tone.Primary);
         Action(next, "Disconnect", () => { ble?.Dispose(); ble = null; ShowConnect(); return Task.CompletedTask; });
-        content.AddView(Label("Reading values over Bluetooth is safe. Setup writes are experimental and confirmed one at a time.", 12, color: Palette.Muted));
+        content.AddView(Label("Inspection is read-only. Offline setup is experimental; each phase needs confirmation.", 12, color: Palette.Muted));
     }
 
     // Read-only survey of what nearby mAX units expose during setup/pairing. Never writes, and never
@@ -613,81 +620,113 @@ public sealed class MainActivity : Activity
 
     Task BleGuidedSetup(string serial, string mac, string model)
     {
-        Shell("Guided setup"); backAction = BackToStart;
-        var target = string.Join("  ·  ", new[] { model, serial, mac }.Where(v => !string.IsNullOrEmpty(v)));
-        BleLog.Add($"guided setup opened for {(target.Length > 0 ? target : "a unit")}");
-        var logCard = Card("Activity log", "Records each Bluetooth step with byte lengths and status codes. Secret values are noted by length only. Export it to share here.", chipText: "Diagnostic", chipColor: Palette.Accent);
-        Action(logCard, "Export activity log", () => { ShowReport("Bluetooth activity log", "Every Bluetooth step this session, newest last. Secret values are never included.", BleLog.Export()); return Task.CompletedTask; }, Tone.Primary);
-        Action(logCard, "Clear log", () => { BleLog.Clear(); status.Text = "Activity log cleared."; return Task.CompletedTask; });
-        var warn = Card("Experimental — read first", target.Length > 0 ? "Target: " + target : null, chipText: "Caution", chipColor: Palette.Warning);
-        warn.AddView(Label("The exact Bluetooth write format is reconstructed from the official app and has not been confirmed on hardware. A wrong write can leave a factory-reset router recoverable only with the SURFboard Central app. Nothing is sent until you confirm each step below.", 14, color: Palette.Muted));
-
-        var form = Card("Wi-Fi to set");
-        var ssid = Input(form, "Network name (SSID)", "");
-        var passphrase = Input(form, "Wi-Fi password (8–63 characters)", "", secret: true);
-
-        var admin = Card("Router admin password", "Generated on this phone. This becomes the local management password. Save it somewhere safe.");
-        var adminField = Input(admin, "Admin password", GeneratePassword());
-        Action(admin, "Regenerate", () => { adminField.Text = GeneratePassword(); return Task.CompletedTask; });
-
-        var steps = Card("Writes (locked)", "Writes are locked. Unlock them only for a spare unit you are ready to factory-reset.", chipText: "Experimental", chipColor: Palette.Danger);
-        var writes = Column(); writes.Visibility = ViewStates.Gone;
+        var device = new CloudDevice(model, serial.Trim().ToUpperInvariant(), BleSetupProtocol.NormalizeMac(mac));
+        BleSetupProtocol.ValidateIdentity(device);
+        Shell("Offline first-time setup"); backAction = BackToStart;
+        var info = Card("Experimental · factory-reset unit only", device.ToString(), chipText: "No cloud", chipColor: Palette.Warning);
+        info.AddView(Label("This attempts local setup over Bluetooth without an ARRIS account. The text format and fragment order were checked against SURFboard Central 4.3.5. Whether your firmware finishes without cloud registration still needs hardware testing. Use a spare unit you can reset; this changes its local login and Wi-Fi.", 14, color: Palette.Muted));
+        var form = Card("Local login and Wi-Fi", "Use printable ASCII for this experimental flow. These are new local credentials, independent of an ARRIS account.");
+        var user = Input(form, "Local username", "admin@router.local");
+        var admin = Input(form, "Local admin password (12–64 characters)", GeneratePassword(), secret: true);
+        var ssid = Input(form, "Wi-Fi name (1–32 characters)");
+        var pass = Input(form, "Wi-Fi password (8–63 characters)", secret: true);
+        var steps = Card("Setup steps", "Each phase sends its displayed sequence once, in order, waiting for every acknowledgement. A failed or uncertain phase locks all further writes.");
+        var writes = Column(); writes.Visibility = ViewStates.Gone; steps.AddView(writes);
+        var stage1 = Column(); var stage2 = Column(); var stage3 = Column();
+        writes.AddView(stage1); writes.AddView(stage2); writes.AddView(stage3);
+        stage2.Visibility = stage3.Visibility = ViewStates.Gone;
+        BleSetupSession? session = null; OfflineSetupDraft? draft = null; string? pendingPath = null;
+        var recovery = Card("Verify after joining Wi-Fi", "The proposed login is saved encrypted before any write. Verification checks the router's certificate, authenticated serial and protected settings; a Bluetooth acknowledgement alone is not success.");
+        recovery.Visibility = ViewStates.Gone;
+        Action(recovery, "Join Wi-Fi and verify local login", () =>
+        {
+            ble?.Dispose(); ble = null; ShowOfflineVerification(pendingPath!, draft!); return Task.CompletedTask;
+        }, Tone.Primary);
+        Action(recovery, "Export Bluetooth activity log", () => { ShowReport("Bluetooth activity log", "Setup steps and lengths; provisioning values are withheld.", BleLog.Export()); return Task.CompletedTask; });
         Button? unlock = null;
-        // Any failed write re-locks the steps: a reported failure can still be partly applied.
-        void Lock(string why)
+        unlock = Action(steps, "Unlock this setup attempt", async () =>
         {
-            writes.Visibility = ViewStates.Gone;
-            if (unlock is not null) unlock.Visibility = ViewStates.Visible;
-            status.Text = why;
-        }
-        unlock = Action(steps, "Unlock experimental writes", async () =>
-        {
-            if (!await Confirm("Unlock experimental writes?",
-                "Use these only on a spare unit you can factory-reset.\n\nIn testing, a write that the app reported as rejected was still partly applied, leaving the unit stuck mid-setup until a factory reset and setup with SURFboard Central.\n\nEach write still needs its own confirmation.", "I understand, unlock"))
-                return;
+            var candidate = new OfflineSetupDraft(device, new RouterCredential(user.Text?.Trim() ?? "", admin.Text ?? ""), ssid.Text ?? "");
+            BleSetupProtocol.Validate(candidate, pass.Text ?? "");
+            if (!await Confirm("Attempt offline setup on this unit?",
+                "Target: " + device + "\n\nConfirm this is your factory-reset spare router. Three separate phases will change the local login, Wi-Fi, and setup state. The firmware may still require cloud registration. A partial attempt may need a factory reset. The app never resets a router automatically.", "Unlock attempt")) return;
             writes.Visibility = ViewStates.Visible; unlock!.Visibility = ViewStates.Gone;
-            status.Text = "Experimental writes unlocked for this screen only.";
+            status.Text = "Unlocked. No router writes have been sent.";
         }, Tone.Danger);
-        steps.AddView(writes);
-
-        async Task EncryptedWrite(string label, string uuid, Func<string> value, bool experimental)
+        async Task Step(Func<Task> action)
         {
-            var text = value();
-            if (string.IsNullOrEmpty(text)) throw new RouterException("Enter a value first.");
-            var preview = experimental ? "\n\nThis step's exact format is unverified." : "";
-            if (!await Confirm("Write " + label + "?", $"Send {label} to the router over Bluetooth now?{preview}", "Write")) { status.Text = "Skipped " + label + "."; return; }
-            var key = await BleReadText(MaxBle.EncryptionKey);
-            if (string.IsNullOrEmpty(key)) throw new RouterException("Could not read the router's encryption key, so nothing was written.");
-            var cipher = CloudAcquisition.EncryptForRouter(key, text);
-            try { await ble!.WriteAsync(uuid, System.Text.Encoding.UTF8.GetBytes(cipher), lifetime.Token); }
-            catch (RouterException ex)
+            try { await action(); }
+            catch
             {
-                var state = await BleReadText(MaxBle.ObaState);
-                Lock("Writes locked after a failure.");
-                throw new RouterException($"Writing {label} was reported as failed. {ex.Message} Setup state: {(state.Length > 0 ? state : "unknown")}.\n\nThe router may still have partly applied it. Stop here: don't send more writes. If the unit stops responding, factory-reset it and set it up with SURFboard Central.");
+                writes.Visibility = ViewStates.Gone; unlock!.Visibility = ViewStates.Gone;
+                ble?.Dispose(); ble = null; throw;
             }
-            var after = await BleReadText(MaxBle.ObaState);
-            BleLog.Add($"setup state after {label}: {(after.Length > 0 ? after : "unknown")}");
-            status.Text = label + " written. Setup state: " + (after.Length > 0 ? after : "unknown") + ".";
-            await Message("Written", $"{label} was written.\n\nSetup state now: {(after.Length > 0 ? after : "unknown")}.\n\nRemember a written value is not proof the router applied it. Export the log to review the full sequence.");
         }
-
-        Action(writes, "1 · Write network name (SSID)", () => EncryptedWrite("the SSID", MaxBle.P11Ssid, () => ssid.Text ?? "", true), Tone.Secondary);
-        Action(writes, "2 · Write Wi-Fi password", () => EncryptedWrite("the Wi-Fi password", MaxBle.P11Passphrase, () => passphrase.Text ?? "", true), Tone.Secondary);
-        Action(writes, "3 · Write admin password", () => EncryptedWrite("the admin password", MaxBle.P11UserPwd, () => adminField.Text ?? "", true), Tone.Secondary);
-        Action(writes, "4 · Mark setup complete", async () =>
+        Action(stage1, "1 · Write local login", () => Step(async () =>
         {
-            if (!await Confirm("Finish setup?", "Send the onboarding-complete signal to the router? Do this only after the earlier writes succeeded.", "Finish"))
-            { status.Text = "Setup not marked complete."; return; }
-            try { await ble!.WriteAsync(MaxBle.ObaComplete, System.Text.Encoding.UTF8.GetBytes("1"), lifetime.Token); }
-            catch (RouterException ex) { Lock("Writes locked after a failure."); throw new RouterException("Marking setup complete was reported as failed. " + ex.Message + " The router may still have applied it; check before sending anything else."); }
-            status.Text = "Onboarding-complete signal sent.";
-            await Message("Done", "The router was told setup is complete. Join its new Wi-Fi. Then save a login: offline, use More options → Enter a local management login with the admin password you wrote (the expected username is not yet confirmed); with Internet, ARRIS account sign-in also works if the unit is registered to your account.");
-        }, Tone.Danger);
-
-        var back = Card("Finish");
-        Action(back, "Disconnect Bluetooth", () => { ble?.Dispose(); ble = null; ShowConnect(); return Task.CompletedTask; });
+            draft = new OfflineSetupDraft(device, new RouterCredential(user.Text?.Trim() ?? "", admin.Text ?? ""), ssid.Text ?? "");
+            var wifi = pass.Text ?? ""; BleSetupProtocol.Validate(draft, wifi);
+            if (!await Confirm("Write the local login?",
+                "Send SET:1, then four username fragments (slots 4 → 1); send SET:2, then four admin-password fragments (slots 4 → 1). Ten acknowledged writes, no retries.\n\nThe proposed login will be saved encrypted on this phone first.", "Write local login")) return;
+            pendingPath = OfflineSetupStore.Save(draft);
+            recovery.Visibility = ViewStates.Visible;
+            user.Enabled = admin.Enabled = ssid.Enabled = pass.Enabled = false;
+            session = new BleSetupSession(ble!, draft, wifi);
+            await session.WriteCredentialsAsync(lifetime.Token);
+            stage1.Visibility = ViewStates.Gone; stage2.Visibility = ViewStates.Visible;
+            status.Text = "Local-login writes acknowledged. HTTPS login is not verified yet.";
+        }), Tone.Primary);
+        Action(stage2, "2 · Write Wi-Fi", () => Step(async () =>
+        {
+            if (!await Confirm("Write Wi-Fi settings?",
+                "Network: " + draft!.Ssid + "\n\nSend four network-name fragments, then four Wi-Fi-password fragments, each in slot order 4 → 1. Eight acknowledged writes, no retries.", "Write Wi-Fi")) return;
+            await session!.WriteWifiAsync(lifetime.Token);
+            pass.Text = ""; admin.Text = "";
+            stage2.Visibility = ViewStates.Gone; stage3.Visibility = ViewStates.Visible;
+            status.Text = "Wi-Fi writes acknowledged. Join and verify after the final step.";
+        }), Tone.Primary);
+        Action(stage3, "3 · Finish Bluetooth setup", () => Step(async () =>
+        {
+            if (!await Confirm("Send setup-complete command?",
+                "Send SETOBCOMPLETE once. Bluetooth may disconnect and the router may restart its Wi-Fi. No cloud registration or account upload is performed. You must still verify the local login.", "Finish attempt")) return;
+            await session!.CompleteAsync(lifetime.Token);
+            writes.Visibility = ViewStates.Gone; ble?.Dispose(); ble = null;
+            status.Text = "Setup-complete command acknowledged. Join the new Wi-Fi and verify the local login.";
+        }), Tone.Danger);
+        var log = Card("Activity");
+        Action(log, "Export Bluetooth activity log", () => { ShowReport("Bluetooth activity log", "Provisioning values are withheld.", BleLog.Export()); return Task.CompletedTask; });
+        Action(log, "Disconnect Bluetooth", () => { ble?.Dispose(); ble = null; ShowConnect(); return Task.CompletedTask; });
         return Task.CompletedTask;
+    }
+
+    void ShowOfflineVerification(string pendingPath, OfflineSetupDraft draft)
+    {
+        Shell("Verify offline setup"); backAction = BackToStart;
+        var info = Card("Pending local login", draft.Device.ToString(), chipText: "Unverified", chipColor: Palette.Warning);
+        info.AddView(Label("Join “" + draft.Ssid + "” or connect to this router over Ethernet. Mobile data can be off. This page uses only the local API and needs no SURFboard reference or ARRIS account.", 14));
+        Action(info, "Open Wi-Fi settings", () => { StartActivity(new Intent(Android.Provider.Settings.ActionWifiSettings)); return Task.CompletedTask; }, Tone.Primary);
+        var verify = Card("Find and verify the router");
+        address = Input(verify, "Private IPv4 address", "192.168.7.1");
+        Action(verify, "Find this router on Wi-Fi and verify", async () =>
+        {
+            AndroidNetwork.UseLocal(); status.Text = "Looking for the pending router on this local network…";
+            var found = await RouterDiscovery.DiscoverApisAsync(AndroidNetwork.Candidates().Distinct().Take(1024).ToArray(), null, lifetime.Token);
+            var matches = found.Where(x => x.Mac == draft.Device.Mac).ToArray();
+            if (matches.Length != 1) throw new RouterException(matches.Length == 0 ? "The pending router did not answer. Check its Wi-Fi or enter its address." : "Multiple devices used this identity. Inspect the network before attempting login.");
+            await VerifyOfflineDraft(pendingPath, draft, matches[0].Address, matches[0].Pin);
+        }, Tone.Primary);
+        Action(verify, "Verify at entered address", () => VerifyOfflineDraft(pendingPath, draft, address.Text?.Trim() ?? "", null));
+        info.AddView(Label("If login fails, this pending record remains available on the start screen. No credentials or setup writes are changed by verification.", 13, color: Palette.Muted));
+    }
+
+    async Task VerifyOfflineDraft(string path, OfflineSetupDraft draft, string target, string? pin)
+    {
+        status.Text = "Checking the proposed local login…"; AndroidNetwork.UseLocal();
+        var record = await CloudAcquisition.VerifyAndSaveAsync(new(draft.Credential, [draft.Device]), draft.Device, target, lifetime.Token, pin,
+            "User-confirmed experimental Bluetooth setup, then authenticated local serial/mode reads");
+        // A verified credential is safely stored before the pending record is removed.
+        try { File.Delete(path); } catch (IOException) { }
+        await Connect(record);
     }
 
     // A strong local admin password: mixed case, digits and a symbol, generated on-device.

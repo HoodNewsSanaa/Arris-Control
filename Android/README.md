@@ -17,6 +17,14 @@ That's it. The app finds the SURFboard settings it needs, signs in, picks your r
 
 **More options** also has: scanning for routers, a manual router address, a previously acquired credential, an existing local management login (not the Wi-Fi password), and Bluetooth setup for a factory-reset router.
 
+**Experimental first-time offline setup:** Bluetooth setup now uses the text
+fragments and slot order observed in SURFboard Central 4.3.5, followed by its
+actual setup-complete command. It saves an encrypted pending local login before
+writing, stops after any uncertain result, and provides local HTTPS verification
+without an ARRIS account or protocol reference. This still needs a spare-unit
+hardware test; firmware may require cloud registration. See
+[the exact scope, procedure and evidence](../docs/offline-first-setup.md).
+
 ### Personal builds with the settings bundled
 
 Public releases never include ARRIS's app client secret. If you build your own APK, you can bundle it so sign-in never needs SURFboard Central:

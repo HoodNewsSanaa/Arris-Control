@@ -27,3 +27,15 @@ Android preview for ARRIS SURFboard mAX local management (Android 8.0+, ARM64 ph
 This APK is a preview signed with the build runner's Android development key. It is installable but is not a production-signed Play Store release; a later build may require uninstalling this preview, which also removes its locally encrypted credentials.
 
 GitHub CI tests protocol fixtures and real Android Keystore on an emulator. Live router operation and offline-WAN Wi-Fi behavior require physical-device testing. The APK does not change firmware or fix wireless association failures.
+# Offline first-time setup experiment
+
+- Replaced guessed encrypted single-slot Bluetooth writes with the observed
+  4.3.5 text-fragment protocol: separate username/password selectors, slots 4
+  through 1, and the actual setup-complete command.
+- Added three separately confirmed phases, complete-interface preflight,
+  identity checks before each phase, and stop-on-error behavior without retries.
+- Preserve the proposed local login encrypted before any write and expose pending
+  logins on the start screen for local verification after a restart.
+- No ARRIS-server calls or SURFboard reference are needed in this flow. Actual
+  first-time setup still needs hardware validation on a spare factory-reset unit.
+

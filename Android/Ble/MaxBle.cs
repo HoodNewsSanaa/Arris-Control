@@ -9,9 +9,9 @@ namespace ArrisControl;
 
 /// <summary>
 /// Bluetooth GATT identifiers for SURFboard mAX onboarding, and a minimal async
-/// wrapper around Android's GATT API. Reads are always safe; writes are used only
-/// by the guided setup flow, one at a time, after explicit user confirmation.
-/// See docs/ble-onboarding.md for the protocol notes these come from.
+/// wrapper around Android's GATT API. Secret reads are refused; writes are used
+/// only by the confirmed offline setup flow, one acknowledged fragment at a time.
+/// See docs/offline-first-setup.md for the inspected protocol and limitations.
 /// </summary>
 internal static class MaxBle
 {
@@ -27,7 +27,7 @@ internal static class MaxBle
     public const string ObaState     = "0000aa08-0000-1000-8000-00805f9b34fb";
     public const string EncryptionKey= "0000ab0a-0000-1000-8000-00805f9b34fb";
 
-    // Written during guided setup (each one individually confirmed by the user).
+    // Provisioning slots hold fragments of one value, not individual radios.
     public const string FriendlyName = "0000aa14-0000-1000-8000-00805f9b34fb";
     public const string SetType      = "0000ab1c-0000-1000-8000-00805f9b34fb";
     public const string P11Ssid      = "0000ab01-0000-1000-8000-00805f9b34fb";
@@ -37,7 +37,7 @@ internal static class MaxBle
 
     public static UUID Uuid(string s) => UUID.FromString(s)!;
 
-    // Characteristics whose contents diagnostics must never read: the write-encryption key,
+    // Characteristics whose contents diagnostics must never read: the vendor SSO key,
     // credential slots, router password and Wi-Fi passphrases. Their presence is still reported.
     public static readonly HashSet<string> NeverRead = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -75,7 +75,7 @@ internal sealed record BleDevice(string Name, string Address, int Rssi, Bluetoot
 /// Minimal, strictly-serial GATT client: one scan, one connection, one in-flight
 /// read/write at a time. Every operation has a timeout and never retries on its own.
 /// </summary>
-internal sealed class BleManager : Java.Lang.Object
+internal sealed class BleManager : Java.Lang.Object, IBleSetupWire
 {
     readonly Context context;
     readonly BluetoothAdapter adapter;
@@ -197,7 +197,7 @@ internal sealed class BleManager : Java.Lang.Object
     public async Task<byte[]> ReadAsync(string uuid, CancellationToken token)
     {
         if (gatt is null || bridge is null) throw new RouterException("Not connected over Bluetooth.");
-        if (MaxBle.NeverRead.Contains(uuid) && uuid != MaxBle.EncryptionKey) throw new RouterException("This characteristic holds a secret and is never read.");
+        if (MaxBle.NeverRead.Contains(uuid)) throw new RouterException("This characteristic holds a secret and is never read.");
         var ch = Find(uuid);
         bridge.BeginRead();
         BleLog.Add($"read  {MaxBle.Short(uuid)} …");
@@ -207,9 +207,13 @@ internal sealed class BleManager : Java.Lang.Object
         return result;
     }
 
-    /// <summary>Writes bytes to a characteristic and waits for the router to acknowledge.</summary>
+    /// <summary>Setup requires acknowledged writes, not write-without-response.</summary>
+    public bool CanWrite(string uuid) => Has(uuid) && (Find(uuid).Properties & GattProperty.Write) != 0;
+
+    /// <summary>Writes an allowlisted fragment and waits for acknowledgement.</summary>
     public async Task WriteAsync(string uuid, byte[] value, CancellationToken token)
     {
+        if (!BleSetupProtocol.WriteUuids.Contains(uuid)) throw new RouterException("This Bluetooth write is outside the offline setup protocol.");
         if (gatt is null || bridge is null) throw new RouterException("Not connected over Bluetooth.");
         var ch = Find(uuid);
         ch.WriteType = GattWriteType.Default;

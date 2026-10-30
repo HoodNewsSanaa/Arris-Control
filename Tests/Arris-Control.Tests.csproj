@@ -5,7 +5,7 @@
     <DefineConstants>$(DefineConstants);PORTABLE_TEST</DefineConstants><NuGetAudit>false</NuGetAudit>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="../Core.cs;../Settings.cs;../RouterDiscovery.cs;../CloudAcquisition.cs;../CloudProtocol.cs;../CognitoCrypto.cs;../AcquisitionStore.cs;../SelfTests.cs;../CloudSelfTests.cs;../DiscoverySelfTests.cs" Link="Shared/%(Filename)%(Extension)" />
+    <Compile Include="../Core.cs;../OfflineSetup.cs;../OfflineSetupSelfTests.cs;../Settings.cs;../RouterDiscovery.cs;../CloudAcquisition.cs;../CloudProtocol.cs;../CognitoCrypto.cs;../AcquisitionStore.cs;../SelfTests.cs;../CloudSelfTests.cs;../DiscoverySelfTests.cs" Link="Shared/%(Filename)%(Extension)" />
     <EmbeddedResource Include="../srp-test-vector.json" />
   </ItemGroup>
 </Project>

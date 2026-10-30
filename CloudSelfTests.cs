@@ -50,9 +50,6 @@ internal static class CloudSelfTests
         var vector=JsonNode.Parse(vectorStream)!;string V(string key)=>Catalog.Text(vector[key]);var srp=new CognitoSrp(V("Pool"),V("PrivateA"));
         Assert(srp.PublicA==V("PublicA") && srp.Sign(V("User"),V("Password"),V("ServerB"),V("Salt"),V("SecretBlock"),V("Timestamp"))==V("Signature"),"Embedded SRP regression vector failed.");
         Assert(CloudAcquisition.Decrypt("0123456789abcdef0123456789abcdef",Encrypted())=="FictionalLocalPassword123!","Account SSO decryption mapping failed.");
-        // The BLE guided-setup write encryption must round-trip with the same scheme the router uses.
-        var sampleKey="0123456789abcdef0123456789abcdef";var sampleValue="Fictional-Setup-Value_42!";
-        Assert(CloudAcquisition.Decrypt(sampleKey,CloudAcquisition.EncryptForRouter(sampleKey,sampleValue))==sampleValue,"Router write encryption did not round-trip.");
         using var api=new FakeCloud();var acquired=await CloudAcquisition.AcquireAsync("fictional@example.com","FictionalCloudPassword123!",Config,api);
         Assert(acquired.Credential.Password=="FictionalLocalPassword123!" && acquired.Devices.Single().Mac=="001122334455","Acquired credential/inventory parsing failed.");
         var encoded=JsonSerializer.SerializeToUtf8Bytes(acquired);

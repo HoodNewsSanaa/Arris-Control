@@ -80,22 +80,6 @@ internal static class CloudAcquisition
         var local=Decrypt(sso.Key,sso.Encrypted);var devices=Devices(inventory).Concat(Devices(info)).DistinctBy(d=>(d.Serial,d.Mac)).ToList();
         return new(new RouterCredential(email,local),devices);
     }
-    // Encrypts a value for a BLE onboarding write using the key the router supplies over
-    // Bluetooth, with the same AES-CBC/PKCS7 and fixed IV the account SSO path already uses.
-    // Returns base64. Used only by the guided setup flow, per confirmed-write.
-    internal static string EncryptForRouter(string key,string plaintext)
-    {
-        byte[]? plain=null;byte[]? keyBytes=null;byte[]? cipher=null;
-        try
-        {
-            keyBytes=Encoding.UTF8.GetBytes(key);plain=Encoding.UTF8.GetBytes(plaintext);
-            using var aes=Aes.Create();aes.Key=keyBytes;aes.IV=Encoding.UTF8.GetBytes("ARRISMAXMANAGERM");aes.Mode=CipherMode.CBC;aes.Padding=PaddingMode.PKCS7;
-            cipher=aes.EncryptCbc(plain,aes.IV,PaddingMode.PKCS7);return Convert.ToBase64String(cipher);
-        }
-        catch(Exception ex) when(ex is CryptographicException or ArgumentException)
-        {throw new RouterException("Could not encrypt the value for the router. Nothing was written.");}
-        finally{if(plain is not null)CryptographicOperations.ZeroMemory(plain);if(keyBytes is not null)CryptographicOperations.ZeroMemory(keyBytes);if(cipher is not null)CryptographicOperations.ZeroMemory(cipher);}
-    }
     internal static string Decrypt(string key,string encrypted)
     {
         byte[]? plain=null;byte[]? keyBytes=null;byte[]? cipher=null;
@@ -149,7 +133,7 @@ internal static class CloudAcquisition
     }
     /// <summary>First local verification. The certificate is pinned at this login (trust on first use);
     /// pass <paramref name="expectedPin"/> when the address came from a scan so the same certificate is required.</summary>
-    public static async Task<CredentialRecord> VerifyAndSaveAsync(AcquiredCredential acquired,CloudDevice selected,string address,CancellationToken token=default,string? expectedPin=null)
+    public static async Task<CredentialRecord> VerifyAndSaveAsync(AcquiredCredential acquired,CloudDevice selected,string address,CancellationToken token=default,string? expectedPin=null,string verifiedVia="Cloud account SSO then direct local login and protected serial/mode reads")
     {
         if(!acquired.Devices.Contains(selected))throw new RouterException("Select a device returned by this account's inventory.");
         var record=new CredentialRecord("",selected.Serial,selected.Mac,address);using var wire=new LocalWire(record,expectedPin);
@@ -159,6 +143,6 @@ internal static class CloudAcquisition
         var mode=await wire.SendAsync("/getData?key=DEVICEOPERMODE_ALL",null,token);
         if(Catalog.Text(mode["DEVICEOPERMODE"]?["MODE"]) is not ("DUAL" or "IPV4ONLY" or "BRIDGE"))throw new RouterException("No recognized protected mode was returned. No credential was saved.");
         var pin=wire.ObservedPin??throw new RouterException("The router certificate could not be recorded. No credential was saved.");
-        return CredentialStore.SaveVerified(acquired.Credential,selected,address,pin);
+        return CredentialStore.SaveVerified(acquired.Credential,selected,address,pin,verifiedVia:verifiedVia);
     }
 }
