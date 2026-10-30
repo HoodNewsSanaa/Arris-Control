@@ -80,6 +80,22 @@ internal static class CloudAcquisition
         var local=Decrypt(sso.Key,sso.Encrypted);var devices=Devices(inventory).Concat(Devices(info)).DistinctBy(d=>(d.Serial,d.Mac)).ToList();
         return new(new RouterCredential(email,local),devices);
     }
+    // Encrypts a value for a BLE onboarding write using the key the router supplies over
+    // Bluetooth, with the same AES-CBC/PKCS7 and fixed IV the account SSO path already uses.
+    // Returns base64. Used only by the guided setup flow, per confirmed-write.
+    internal static string EncryptForRouter(string key,string plaintext)
+    {
+        byte[]? plain=null;byte[]? keyBytes=null;byte[]? cipher=null;
+        try
+        {
+            keyBytes=Encoding.UTF8.GetBytes(key);plain=Encoding.UTF8.GetBytes(plaintext);
+            using var aes=Aes.Create();aes.Key=keyBytes;aes.IV=Encoding.UTF8.GetBytes("ARRISMAXMANAGERM");aes.Mode=CipherMode.CBC;aes.Padding=PaddingMode.PKCS7;
+            cipher=aes.EncryptCbc(plain,aes.IV,PaddingMode.PKCS7);return Convert.ToBase64String(cipher);
+        }
+        catch(Exception ex) when(ex is CryptographicException or ArgumentException)
+        {throw new RouterException("Could not encrypt the value for the router. Nothing was written.");}
+        finally{if(plain is not null)CryptographicOperations.ZeroMemory(plain);if(keyBytes is not null)CryptographicOperations.ZeroMemory(keyBytes);if(cipher is not null)CryptographicOperations.ZeroMemory(cipher);}
+    }
     internal static string Decrypt(string key,string encrypted)
     {
         byte[]? plain=null;byte[]? keyBytes=null;byte[]? cipher=null;

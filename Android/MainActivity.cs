@@ -23,6 +23,7 @@ public sealed class MainActivity : Activity
     CloudConfiguration? configuration;
     AcquiredCredential? acquired;
     RouterClient? client;
+    BleManager? ble;
     Page currentPage = Catalog.Pages[0];
     CancellationTokenSource lifetime = new();
     readonly List<Button> buttons = [];
@@ -30,6 +31,8 @@ public sealed class MainActivity : Activity
     // Certificate pins seen by the last scan, so first-time verification requires the same certificate.
     readonly Dictionary<string, string> scannedPins = new(StringComparer.Ordinal);
     const int ImportReference = 41;
+    const int BlePermissions = 42;
+    TaskCompletionSource<bool>? permissionResult;
 
     protected override void OnCreate(Bundle? state)
     {
@@ -73,7 +76,7 @@ public sealed class MainActivity : Activity
     }
     protected override void OnDestroy()
     {
-        lifetime.Cancel(); client?.Dispose(); AndroidNetwork.UseInternet();
+        lifetime.Cancel(); client?.Dispose(); ble?.Dispose(); AndroidNetwork.UseInternet();
         lifetime.Dispose(); base.OnDestroy();
     }
     int Dp(int n) => (int)(n * Resources!.DisplayMetrics!.Density);
@@ -295,7 +298,9 @@ public sealed class MainActivity : Activity
             var device = new CloudDevice("ARRIS mAX", id, hardware); acquired = new(credential, [device]);
             await Verify(device);
         });
-        content.AddView(Label("Local control · credentials encrypted on this phone", 12));
+        var newRouter = Card("Set up a new router", "Over Bluetooth, for a factory-reset mAX. Shows each value and asks you to confirm every change.", chipText: "Bluetooth", chipColor: Palette.Accent);
+        Action(newRouter, "Scan over Bluetooth", BleScanAndPick);
+        content.AddView(Label("Local control · credentials encrypted on this phone", 12, color: Palette.Muted));
     }
     async Task ScanRouters()
     {
@@ -362,6 +367,138 @@ public sealed class MainActivity : Activity
             finally { if (File.Exists(temporary)) File.Delete(temporary); }
         });
     }
+
+    // ---- Bluetooth: scan, read-only inspect, and guided per-write setup ----
+
+    public override void OnRequestPermissionsResult(int requestCode, string[] permissions, Android.Content.PM.Permission[] grantResults)
+    {
+        base.OnRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != BlePermissions) return;
+        var granted = grantResults.Length > 0 && grantResults.All(r => r == Android.Content.PM.Permission.Granted);
+        permissionResult?.TrySetResult(granted);
+    }
+
+    async Task<bool> EnsureBlePermissions()
+    {
+        string[] needed = Build.VERSION.SdkInt >= BuildVersionCodes.S
+            ? [Android.Manifest.Permission.BluetoothScan, Android.Manifest.Permission.BluetoothConnect]
+            : [Android.Manifest.Permission.AccessFineLocation];
+        if (needed.All(p => CheckSelfPermission(p) == Android.Content.PM.Permission.Granted)) return true;
+        permissionResult = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        RequestPermissions(needed, BlePermissions);
+        return await permissionResult.Task;
+    }
+
+    async Task BleScanAndPick()
+    {
+        if (!await EnsureBlePermissions())
+            throw new RouterException("Bluetooth permission is needed to find a nearby router. You can grant it in Android Settings → Apps → Arris Control.");
+        if (!MaxBle.Supported(this))
+            throw new RouterException("Turn on Bluetooth to set up a new router, then try again.");
+        status.Text = "Scanning over Bluetooth…";
+        ble?.Dispose(); ble = new BleManager(this);
+        var devices = await ble.ScanAsync(TimeSpan.FromSeconds(7), lifetime.Token);
+        if (devices.Count == 0)
+        {
+            await Message("No Bluetooth devices", "No Bluetooth devices answered. A mAX router advertises over Bluetooth only during setup — power it on (or factory-reset it) and keep this phone close.");
+            return;
+        }
+        var choice = await Choose("Nearby Bluetooth devices", devices.Select(d => d.ToString()).ToArray());
+        if (choice < 0) return;
+        await BleConnectAndInspect(devices[choice]);
+    }
+
+    async Task BleConnectAndInspect(BleDevice device)
+    {
+        status.Text = "Connecting over Bluetooth to " + (string.IsNullOrEmpty(device.Name) ? device.Address : device.Name) + "…";
+        await ble!.ConnectAsync(device.Device, lifetime.Token);
+
+        string serial = await BleReadText(MaxBle.Serial), mac = await BleReadText(MaxBle.WanMac);
+        string model = await BleReadText(MaxBle.ModelNumber), mode = await BleReadText(MaxBle.DeviceMode);
+        string wan = await BleReadText(MaxBle.WanStatus), obaState = await BleReadText(MaxBle.ObaState);
+
+        Shell("Router over Bluetooth");
+        var looksArris = serial.Length > 0 || model.Length > 0;
+        var info = Card(string.IsNullOrEmpty(device.Name) ? "Connected device" : device.Name,
+            chipText: looksArris ? "mAX" : "unknown", chipColor: looksArris ? Palette.Success : Palette.Muted);
+        void Row(string k, string v) { if (!string.IsNullOrEmpty(v)) info.AddView(Label(k + ":  " + v, 14)); }
+        Row("Model", model); Row("Serial", serial); Row("WAN MAC", mac);
+        Row("Routing mode", mode); Row("WAN status", wan); Row("Onboarding state", obaState);
+        if (!looksArris) info.AddView(Label("This device didn't return mAX identity values. It may not be an ARRIS router, or not in setup mode.", 13, color: Palette.Warning));
+
+        var next = Card("What next");
+        Action(next, "Guided setup (experimental)", () => BleGuidedSetup(serial, mac, model), Tone.Primary);
+        Action(next, "Disconnect", () => { ble?.Dispose(); ble = null; ShowConnect(); return Task.CompletedTask; });
+        content.AddView(Label("Reading values over Bluetooth is safe. Setup writes are experimental and confirmed one at a time.", 12, color: Palette.Muted));
+    }
+
+    async Task<string> BleReadText(string uuid)
+    {
+        try { var bytes = await ble!.ReadAsync(uuid, lifetime.Token); return System.Text.Encoding.UTF8.GetString(bytes).Trim('\0', ' ', '\r', '\n'); }
+        catch (RouterException) { return ""; }
+    }
+
+    Task BleGuidedSetup(string serial, string mac, string model)
+    {
+        Shell("Guided setup");
+        var target = string.Join("  ·  ", new[] { model, serial, mac }.Where(v => !string.IsNullOrEmpty(v)));
+        var warn = Card("Experimental — read first", target.Length > 0 ? "Target: " + target : null, chipText: "Caution", chipColor: Palette.Warning);
+        warn.AddView(Label("The exact Bluetooth write format is reconstructed from the official app and has not been confirmed on hardware. A wrong write can leave a factory-reset router recoverable only with the SURFboard Central app. Nothing is sent until you confirm each step below.", 14, color: Palette.Muted));
+
+        var form = Card("Wi-Fi to set");
+        var ssid = Input(form, "Network name (SSID)", "");
+        var passphrase = Input(form, "Wi-Fi password (8–63 characters)", "", secret: true);
+
+        var admin = Card("Router admin password", "Generated on this phone. This becomes the local management password. Save it somewhere safe.");
+        var adminField = Input(admin, "Admin password", GeneratePassword());
+        Action(admin, "Regenerate", () => { adminField.Text = GeneratePassword(); return Task.CompletedTask; });
+
+        var steps = Card("Writes (confirm each)", "Each button sends exactly one Bluetooth write, after a confirmation, then reads it back where the router allows.");
+
+        async Task EncryptedWrite(string label, string uuid, Func<string> value, bool experimental)
+        {
+            var text = value();
+            if (string.IsNullOrEmpty(text)) throw new RouterException("Enter a value first.");
+            var preview = experimental ? "\n\nThis step's exact format is unverified." : "";
+            if (!await Confirm("Write " + label + "?", $"Send {label} to the router over Bluetooth now?{preview}", "Write")) { status.Text = "Skipped " + label + "."; return; }
+            var key = await BleReadText(MaxBle.EncryptionKey);
+            if (string.IsNullOrEmpty(key)) throw new RouterException("Could not read the router's encryption key, so nothing was written.");
+            var cipher = CloudAcquisition.EncryptForRouter(key, text);
+            await ble!.WriteAsync(uuid, System.Text.Encoding.UTF8.GetBytes(cipher), lifetime.Token);
+            status.Text = label + " written.";
+            await Message("Written", label + " was written to the router.");
+        }
+
+        Action(steps, "1 · Write network name (SSID)", () => EncryptedWrite("the SSID", MaxBle.P11Ssid, () => ssid.Text ?? "", true), Tone.Secondary);
+        Action(steps, "2 · Write Wi-Fi password", () => EncryptedWrite("the Wi-Fi password", MaxBle.P11Passphrase, () => passphrase.Text ?? "", true), Tone.Secondary);
+        Action(steps, "3 · Write admin password", () => EncryptedWrite("the admin password", MaxBle.P11UserPwd, () => adminField.Text ?? "", true), Tone.Secondary);
+        Action(steps, "4 · Mark setup complete", async () =>
+        {
+            if (!await Confirm("Finish setup?", "Send the onboarding-complete signal to the router? Do this only after the earlier writes succeeded.", "Finish"))
+            { status.Text = "Setup not marked complete."; return; }
+            await ble!.WriteAsync(MaxBle.ObaComplete, System.Text.Encoding.UTF8.GetBytes("1"), lifetime.Token);
+            status.Text = "Onboarding-complete signal sent.";
+            await Message("Done", "The router was told setup is complete. Join its new Wi-Fi, then use ARRIS account sign-in to save a local credential.");
+        }, Tone.Danger);
+
+        var back = Card("Finish");
+        Action(back, "Disconnect Bluetooth", () => { ble?.Dispose(); ble = null; ShowConnect(); return Task.CompletedTask; });
+        return Task.CompletedTask;
+    }
+
+    // A strong local admin password: mixed case, digits and a symbol, generated on-device.
+    static string GeneratePassword()
+    {
+        const string lower = "abcdefghijkmnpqrstuvwxyz", upper = "ABCDEFGHJKLMNPQRSTUVWXYZ", digits = "23456789", symbols = "!@#$%*-_";
+        const string all = lower + upper + digits + symbols;
+        var rng = System.Security.Cryptography.RandomNumberGenerator.GetBytes(16);
+        var chars = new char[16];
+        chars[0] = lower[rng[0] % lower.Length]; chars[1] = upper[rng[1] % upper.Length];
+        chars[2] = digits[rng[2] % digits.Length]; chars[3] = symbols[rng[3] % symbols.Length];
+        for (var i = 4; i < chars.Length; i++) chars[i] = all[rng[i] % all.Length];
+        return new string(chars);
+    }
+
     async Task Acquire()
     {
         configuration ??= CloudProtocol.LoadSaved();
