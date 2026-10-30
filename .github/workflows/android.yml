@@ -60,10 +60,22 @@ jobs:
       - name: Install Android workload
         run: dotnet workload install android
       - name: Build standalone installable APK
-        run: >-
-          dotnet publish Android/Arris-Control.Android.csproj -c Release
-          -p:AndroidPackageFormats=apk -p:AndroidKeyStore=false
-          -p:ApplicationVersion=${{ github.run_number }} -o artifacts
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          # A persistent release key lets each new APK install over the previous one.
+          # Without the secrets, fall back to a throwaway key (updates then need a reinstall).
+          signing="-p:AndroidKeyStore=false"
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ] && [ -n "$ANDROID_KEYSTORE_PASSWORD" ] && [ -n "$ANDROID_KEY_ALIAS" ]; then
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            signing="-p:AndroidKeyStore=true -p:AndroidSigningKeyStore=$RUNNER_TEMP/release.keystore -p:AndroidSigningKeyAlias=$ANDROID_KEY_ALIAS -p:AndroidSigningStorePass=env:ANDROID_KEYSTORE_PASSWORD -p:AndroidSigningKeyPass=env:ANDROID_KEYSTORE_PASSWORD"
+          else
+            echo "::warning title=Throwaway signing key::Add the ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD and ANDROID_KEY_ALIAS secrets so APKs install as updates."
+          fi
+          dotnet publish Android/Arris-Control.Android.csproj -c Release -p:AndroidPackageFormats=apk $signing -p:ApplicationVersion=${{ github.run_number }} -o artifacts
+          rm -f "$RUNNER_TEMP/release.keystore"
       - name: Collect APK and checksum
         run: |
           python3 - <<'PY'
@@ -76,6 +88,10 @@ jobs:
           files[0].replace(target)
           Path('artifacts/SHA256SUMS-android.txt').write_text(hashlib.sha256(target.read_bytes()).hexdigest() + '  ' + target.name + '\n')
           PY
+      - name: Show APK signing certificate
+        run: |
+          signer=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          "$signer" verify --print-certs artifacts/Arris-Control-android.apk | grep -i "SHA-256" | head -1 | sed 's/^/::notice title=APK signing certificate::/'
       - name: Enable emulator acceleration
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -110,3 +126,16 @@ jobs:
           --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA"
           --title "Arris Control Android preview ${{ github.run_number }}"
           --notes-file Android/RELEASE-NOTES.md --prerelease --latest=false
+      - name: Update the fixed android-latest download
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # One stable link for the newest tested APK. --latest=false keeps the Windows
+          # release as "Latest", so the Windows in-app updater is unaffected.
+          gh release delete android-latest --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || true
+          gh release create android-latest \
+            artifacts/Arris-Control-android.apk artifacts/SHA256SUMS-android.txt artifacts/Android-UI-preview.png \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Arris Control for Android (newest build)" \
+            --notes-file Android/RELEASE-NOTES.md --latest=false
