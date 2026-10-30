@@ -158,7 +158,8 @@ internal sealed class MainWindow : Window
     void Render(Snapshot snapshot)
     {
         rendering=true;content.Children.Clear();FilterRows();readGrid.ItemsSource=snapshot.Reads;
-        if(page.Id=="overview")RenderOverview(snapshot);
+        if(page.Id=="diagnostics")RenderDiagnostics(snapshot);
+        else if(page.Id=="overview")RenderOverview(snapshot);
         else if(page.Id=="mesh")RenderTopology(snapshot);
         else
         {
@@ -182,6 +183,17 @@ internal sealed class MainWindow : Window
         }
         if(content.Children.Count==0)content.Children.Add(Theme.Card(Theme.Text("No supported setting data was returned for this page. Check Read results. Full settings retains any returned fields.")));
         rendering=false;
+    }
+    void RenderDiagnostics(Snapshot snapshot)
+    {
+        var report=Diagnostics.Report(snapshot,"Windows",ReleaseUpdater.CurrentVersion.ToString());
+        var box=new StackPanel();box.Children.Add(Theme.Text("Diagnostics report",20));
+        box.Children.Add(Theme.Text("Read-only: nothing on the router was changed. Values that could identify you are replaced. Copy it to help add support for more settings.",13,Theme.Muted));
+        var text=new TextBox{Text=report,IsReadOnly=true,FontFamily=new FontFamily("Consolas"),FontSize=12,TextWrapping=TextWrapping.NoWrap,AcceptsReturn=true,
+            MaxHeight=460,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,HorizontalScrollBarVisibility=ScrollBarVisibility.Auto,Margin=new Thickness(0,12,0,12)};
+        box.Children.Add(text);
+        box.Children.Add(Theme.Button("Copy report",(_,_)=>{try{Clipboard.SetText(report);status.Text="Diagnostics report copied.";}catch(Exception){status.Text="Could not copy the report.";}},true));
+        content.Children.Add(Theme.Card(box));
     }
     void RenderOverview(Snapshot snapshot)
     {
@@ -245,9 +257,9 @@ internal sealed class MainWindow : Window
             {
                 var check=new CheckBox{Content="Enabled",IsThreeState=old is not ("0" or "1"),IsChecked=old=="1"?true:old=="0"?false:null,VerticalAlignment=VerticalAlignment.Center};check.Checked+=MarkDirty;check.Unchecked+=MarkDirty;check.Indeterminate+=MarkDirty;editor=check;getter=()=>check.IsChecked==true?"1":check.IsChecked==false?"0":old;
             }
-            else if(field.Kind=="choice")
+            else if(field.Kind is "choice" or "channel")
             {
-                var combo=new ComboBox{ItemsSource=field.Choices,SelectedValuePath="Value",SelectedValue=old,MinWidth=230};combo.SelectionChanged+=(_,_)=>{if(!rendering)dirty=true;};editor=combo;getter=()=>combo.SelectedValue as string??old;
+                var combo=new ComboBox{ItemsSource=field.Kind=="channel"?Settings.ChannelChoices(section.Container,old):field.Choices,SelectedValuePath="Value",SelectedValue=old,MinWidth=230};combo.SelectionChanged+=(_,_)=>{if(!rendering)dirty=true;};editor=combo;getter=()=>combo.SelectedValue as string??old;
             }
             else if(field.Kind=="password")
             {

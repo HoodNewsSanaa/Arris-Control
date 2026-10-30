@@ -61,15 +61,17 @@ internal static class Catalog
 {
     public static readonly Page[] Pages = [
         new("overview","Overview","Router status, firmware, Internet connection, and DNS.",["DEVICEOPERMODE_ALL","DEVICESTATUS_ALL","FIRMWARE_ALL","NETWORKDNS_ALL"]),
-        new("mesh","Mesh and devices","Topology, connected devices, radio channels, and backhaul information.",["NETWORKMAP_ALL","HOSTS_ALL","LINKSPEEDBH_ALL"]),
-        new("wifi","Wi-Fi","Main and guest Wi-Fi settings. Saving Wi-Fi changes may disconnect this PC.",["WIFI_24G_ALL","WIFI_5G_ALL","WIFI_GUEST_24G_ALL","WIFI_GUEST_5G_ALL","WIFI_FH_BANDSTEERING_ALL","WIFISETTINGSFEATURE_ALL"]),
-        new("internet","Internet and DNS","DNS servers, WAN information, and IPv6 routing.",["NETWORKDNS_ALL","NETWORKIP_ALL","DEVICEOPERMODE_ALL","WANSETTINGSFEATURE_ALL"]),
+        new("mesh","Mesh and devices","Topology, connected devices, radio channels, and backhaul information.",["NETWORKMAP_ALL","HOSTS_ALL","LINKSPEEDBH_ALL","WIFI_BH_ALL","SPEEDTESTBH_ALL","WIFI_TRIBAND_ALL","HNC_CLIENT_STEERING_ALL"]),
+        new("wifi","Wi-Fi","Main and guest Wi-Fi settings. Saving Wi-Fi changes may disconnect this PC.",["WIFI_24G_ALL","WIFI_5G_ALL","WIFI_GUEST_24G_ALL","WIFI_GUEST_5G_ALL","WIFI_FH_BANDSTEERING_ALL","WIFI_FH_DFS_ALL","WIFI_FAST_LANE_ALL","WIFISETTINGSFEATURE_ALL"]),
+        new("internet","Internet and DNS","DNS servers, WAN information, and IPv6 routing.",["NETWORKDNS_ALL","NETWORKIP_ALL","DEVICEOPERMODE_ALL","WANSTATICIPV4_ALL","WANDYNAMICIPV6_ALL","WANSTATICIPV6_ALL","WANLAG_ALL","WANSETTINGSFEATURE_ALL"]),
         new("lan","LAN and DHCP","DHCP addressing, leases, subnets, and UPnP.",["IPV4DHCPRANGE_ALL","IPV6DHCPRANGE_ALL","IPV4SUBNET_ALL","IPV6SUBNET_ALL","NETWORKMISC_ALL","LANSETTINGSFEATURE_ALL"]),
         new("ports","Reservations and ports","Address reservations and port forwarding rules.",["STATICIP_ALL","PORTFORWARDING_ALL","NETWORKMISC_ALL"]),
         new("priority","Device priority","Priority settings and advertised QoS capabilities.",["DEVICEPRIORITY_ALL","DEVICEPRIORITYFEATURE_ALL","QoS_ALL","QoSFEATURE_ALL"]),
-        new("parental","Parental controls","Parental control state, profiles, and device groups.",["PARENTAL_CONTROL_ALL","PC_PROFILE_ALL","PARENT_GROUP_DEVICES_ALL","PARENT_BLOCK_DEVICES_ALL","PARENTALCONTROLFEATURE_ALL"]),
-        new("device","Device and firmware","Router details, installed firmware, and status light. Firmware downloads are paused.",["DEVICE_INFO_ALL","FIRMWARE_ALL","DEVICESTATUS_ALL","LED_DISPLAY_ALL","DEVICESETTINGSFEATURE_ALL"]),
-        new("capabilities","Capabilities","Feature information returned by this firmware.",["CAPABILITIES_ALL","FEATURECAPABILITIES_ALL","DEVICESETTINGSFEATURE_ALL","WIFISETTINGSFEATURE_ALL","LANSETTINGSFEATURE_ALL","WANSETTINGSFEATURE_ALL","PARENTALCONTROLFEATURE_ALL","CLOUDSETTINGSFEATURE_ALL"])
+        new("parental","Parental controls","Parental control state, profiles, and device groups.",["PARENTAL_CONTROL_ALL","PC_PROFILE_ALL","PARENT_GROUP_DEVICES_ALL","PARENT_BLOCK_DEVICES_ALL","PC_URLS_BLOCKED_ALL","PARENT_URL_FILTER_ALL","PARENT_KEYWORD_FILTER_ALL","PARENTALCONTROLFEATURE_ALL"]),
+        new("device","Device and firmware","Router details, installed firmware, and status light. Firmware downloads are paused.",["DEVICE_INFO_ALL","FIRMWARE_ALL","DEVICESTATUS_ALL","LED_DISPLAY_ALL","LEDRING_ALL","TIME_ALL","DEVICESETTINGSFEATURE_ALL"]),
+        new("tools","Tools and tests","Run a speed test from the router and renew its Internet connection.",["SPEEDTESTWAN_ALL","WANSPEEDTESTFEATURE_ALL","WANSETTINGSFEATURE_ALL"]),
+        new("capabilities","Capabilities","Feature information returned by this firmware.",["CAPABILITIES_ALL","FEATURECAPABILITIES_ALL","DEVICESETTINGSFEATURE_ALL","WIFISETTINGSFEATURE_ALL","LANSETTINGSFEATURE_ALL","WANSETTINGSFEATURE_ALL","PARENTALCONTROLFEATURE_ALL","CLOUDSETTINGSFEATURE_ALL"]),
+        Diagnostics.Page
     ];
     public static readonly HashSet<string> ReadKeys = Pages.SelectMany(p => p.Keys).ToHashSet(StringComparer.Ordinal);
     public static readonly Regex Secret = new("password|passwd|passphrase|psk|secret|token|credential|authorization|private.?key|sso.?key|wpa.*key|wep.*key|(^|_)pin($|_)|(^|_)key($|_)",RegexOptions.IgnoreCase);
@@ -401,5 +403,98 @@ internal sealed class RouterClient : IDisposable
         catch(Exception ex) when(ex is RouterException or HttpRequestException or TaskCanceledException)
         {return "Router accepted the save, but read-back failed. Reconnect if necessary and refresh. No save was retried.";}
     }
+    /// <summary>Sends one allowlisted action (renew WAN, start speed test) after re-verifying the router. Never retried.</summary>
+    public async Task RunActionAsync(string container,Dictionary<string,string> values,CancellationToken token=default)
+    {
+        var body=Settings.Action(container,values);
+        await ConnectAsync(token);await VerifyIdentityAsync(token);
+        try{await wire.SendAsync("/setData",body,token);}
+        catch(Exception ex) when(ex is HttpRequestException or TaskCanceledException)
+        {throw new RouterException("The request was sent, but its result is unknown. Refresh before trying again; it was not retried.");}
+    }
     public void Dispose()=>wire.Dispose();
+}
+
+/// <summary>
+/// Read-only feature check. Queries a fixed list of endpoints, then reports which ones answered
+/// and the field names they returned, with anything identifying replaced. Never writes.
+/// Credential, onboarding and cloud-configuration endpoints are deliberately excluded.
+/// </summary>
+internal static class Diagnostics
+{
+    public static readonly string[] Keys=[
+        "DEVICE_INFO_ALL","FIRMWARE_ALL","DEVICEOPERMODE_ALL","DEVICESTATUS_ALL","CAPABILITIES_ALL","FEATURECAPABILITIES_ALL",
+        "WIFISETTINGSFEATURE_ALL","WANSETTINGSFEATURE_ALL","LANSETTINGSFEATURE_ALL","DEVICESETTINGSFEATURE_ALL","PARENTALCONTROLFEATURE_ALL",
+        "QoSFEATURE_ALL","DEVICEPRIORITYFEATURE_ALL","WANSPEEDTESTFEATURE_ALL","WIFISPEEDTESTFEATURE_ALL","SUBSCRIPTIONSFEATURE_ALL",
+        "WIFI_24G_ALL","WIFI_5G_ALL","WIFI_GUEST_24G_ALL","WIFI_GUEST_5G_ALL","WIFI_FH_BANDSTEERING_ALL","WIFI_FH_DFS_ALL",
+        "WIFI_FAST_LANE_ALL","WIFI_TRIBAND_ALL","HNC_CLIENT_STEERING_ALL","WIFI_BH_ALL","LINKSPEEDBH_ALL","SPEEDTESTBH_ALL",
+        "NETWORKMAP_ALL","PLACEMENT_ALL","WPS","NETWORKDNS_ALL","NETWORKIP_ALL","NETWORKMISC_ALL","DNSPROXY_ALL",
+        "WANSTATICIPV4_ALL","WANDYNAMICIPV6_ALL","WANSTATICIPV6_ALL","WANLAG_ALL","SPEEDTESTWAN_ALL",
+        "IPV4DHCPRANGE_ALL","IPV6DHCPRANGE_ALL","IPV4SUBNET_ALL","IPV6SUBNET_ALL","STATICIP_ALL","PORTFORWARDING_ALL",
+        "DEVICEPRIORITY_ALL","QoS_ALL","PARENTAL_CONTROL_ALL","PC_PROFILE_ALL","PC_URLS_BLOCKED_ALL","PARENT_URL_FILTER_ALL",
+        "PARENT_KEYWORD_FILTER_ALL","TRUSTED_DEVICE_ALL","LED_DISPLAY_ALL","LEDRING_ALL","TIME_ALL","UPDATE_ALL"];
+    public static readonly Page Page=new("diagnostics","Diagnostics",
+        "Read-only check of which router features this firmware supports. Nothing is changed. Values that could identify you are replaced.",Keys);
+    const int MaxLinesPerKey=60;
+    static readonly Regex Personal=new("SSID|NAME|ALIAS|HOST|URL|DESCRIPTION|SERIAL|FRIENDLY|TEXT|LABEL|EMAIL|USER|ADDRESS|MAC|BSSID|KEYWORD|ACCOUNT|ID$|IPV4|IPV6|GATEWAY|DNS",RegexOptions.IgnoreCase);
+    static readonly Regex Ipv4=new(@"^\d{1,3}(?:\.\d{1,3}){3}$");
+    static readonly Regex Mac=new("^(?:[0-9A-Fa-f]{2}[:-]?){5}[0-9A-Fa-f]{2}$");
+
+    /// <summary>Describes one value without revealing anything identifying.</summary>
+    internal static string Value(string field,string value)
+    {
+        if(Catalog.Secret.IsMatch(field))return "[hidden]";
+        if(value.Length==0)return "(empty)";
+        if(value.Split(',').All(v=>Ipv4.IsMatch(v.Trim())))return value.Contains(',')?"<ipv4 list>":"<ipv4>";
+        if(value.Contains(':') && value.Split(',').All(v=>IPAddress.TryParse(v.Trim(),out var ip) && ip.AddressFamily==AddressFamily.InterNetworkV6))
+            return value.Contains(',')?"<ipv6 list>":"<ipv6>";
+        if(Mac.IsMatch(value))return "<mac>";
+        if(Regex.IsMatch(field,"MODEL|VERSION",RegexOptions.IgnoreCase) && Regex.IsMatch(value,"^[A-Za-z0-9_.+ -]{1,40}$"))return value;
+        if(Personal.IsMatch(field))return $"<text, {value.Length} chars>";
+        if(Regex.IsMatch(value,"^[A-Za-z0-9_.+-]{1,20}$"))return value;
+        return $"<text, {value.Length} chars>";
+    }
+    /// <summary>Field paths of a response with described values; lists show their length and first two items.</summary>
+    internal static List<string> Describe(JsonNode node)
+    {
+        var lines=new List<string>();
+        void Visit(JsonNode? n,string path,string leaf,int depth)
+        {
+            if(lines.Count>=MaxLinesPerKey || depth>12)return;
+            if(n is JsonObject o)
+            {
+                foreach(var kv in o)if(!(path.Length==0 && kv.Key=="STATUS"))Visit(kv.Value,path.Length==0?kv.Key:path+"."+kv.Key,kv.Key,depth+1);
+                if(o.Count==0)lines.Add(path+" = {}");
+            }
+            else if(n is JsonArray a)
+            {
+                lines.Add($"{path} = list of {a.Count}");
+                for(var i=0;i<Math.Min(a.Count,2);i++)Visit(a[i],$"{path}[{i}]",leaf,depth+1);
+            }
+            else lines.Add(path+" = "+Value(leaf,n is null?"null":Catalog.Text(n)));
+        }
+        Visit(node,"","",0);
+        if(lines.Count>=MaxLinesPerKey)lines.Add("… more fields not shown");
+        return lines;
+    }
+    public static string Report(Snapshot snapshot,string platform,string version)
+    {
+        string Pick(string key,string leafPattern)
+        {
+            if(!snapshot.Data.TryGetValue(key,out var data))return "unknown";
+            var row=Catalog.Flatten(data,key).FirstOrDefault(r=>Regex.IsMatch(r.Field.Split('.').Last(),leafPattern,RegexOptions.IgnoreCase) && r.Value!="[hidden]");
+            return row is null ? "unknown" : Value(row.Field.Split('.').Last(),row.Value);
+        }
+        var sb=new StringBuilder();
+        sb.AppendLine($"Arris Control diagnostics · {platform} {version} · {snapshot.Time:yyyy-MM-dd HH:mm}");
+        sb.AppendLine($"Router model {Pick("DEVICE_INFO_ALL","MODEL")} · firmware {Pick("FIRMWARE_ALL","VERSION")} · mode {Pick("DEVICEOPERMODE_ALL","^MODE$")}");
+        sb.AppendLine($"{snapshot.Reads.Count(r=>r.Readable)}/{snapshot.Reads.Count} endpoints answered · read-only, nothing was changed");
+        foreach(var read in snapshot.Reads)
+        {
+            sb.AppendLine();
+            sb.AppendLine(read.Readable ? $"[OK] {read.Key}" : $"[--] {read.Key}  ({read.Status})");
+            if(read.Readable && snapshot.Data.TryGetValue(read.Key,out var data))foreach(var line in Describe(data))sb.AppendLine("     "+line);
+        }
+        return sb.ToString();
+    }
 }
