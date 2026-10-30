@@ -9,6 +9,7 @@ internal static class AndroidNetwork
     static ConnectivityManager Manager => (ConnectivityManager)Android.App.Application.Context.GetSystemService(Context.ConnectivityService)!;
     static Network? LocalNetwork => Manager.GetAllNetworks().FirstOrDefault(n =>
         Manager.GetNetworkCapabilities(n) is { } c && (c.HasTransport(TransportType.Wifi) || c.HasTransport(TransportType.Ethernet)));
+    public static bool HasLocalNetwork => LocalNetwork is not null;
     public static void UseLocal()
     {
         var network = LocalNetwork;

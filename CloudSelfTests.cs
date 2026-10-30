@@ -71,6 +71,8 @@ internal static class CloudSelfTests
         {
             var java=Path.Combine(directory,"BuildConfig.java");File.WriteAllText(java,string.Join('\n',Names.Select((n,i)=>$"public static final String {n} = \"{Values[i]}\";")));
             Assert(CloudProtocol.ReadReference(java)==Config,"Java protocol constant extraction failed.");
+            Assert(CloudProtocol.FromJson(CloudProtocol.ToJson(Config))==Config,"Bundled protocol reference JSON did not round-trip.");
+            Assert(CloudProtocol.LoadEmbedded() is null,"A protocol reference is embedded in a test/CI build; it must only exist in personal builds.");
             var unsupported=Path.Combine(directory,"base.apk");
             using(var baseFile=File.Create(unsupported))using(var archive=new ZipArchive(baseFile,ZipArchiveMode.Create))archive.CreateEntry("placeholder");
             Assert(CloudProtocol.ReadReferences([unsupported,java])==Config,"Installed-reference fallback did not check later APK/split sources.");

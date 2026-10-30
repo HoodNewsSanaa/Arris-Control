@@ -49,6 +49,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+      - name: Refuse private SURFboard references in public builds
+        run: |
+          if git ls-files --error-unmatch Android/protocol.local.json >/dev/null 2>&1 || [ -e Android/protocol.local.json ]; then
+            echo "::error title=Private reference::Android/protocol.local.json must never be committed or built in CI."
+            exit 1
+          fi
       - name: Offline shared protocol tests
         run: dotnet run --project Tests/Arris-Control.Tests.csproj -c Release
       - name: Install Android workload

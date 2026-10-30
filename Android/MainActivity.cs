@@ -33,6 +33,8 @@ public sealed class MainActivity : Activity
     const int ImportReference = 41;
     const int BlePermissions = 42;
     TaskCompletionSource<bool>? permissionResult;
+    TaskCompletionSource<Android.Net.Uri?>? pickedReference;
+    bool addressEdited;
 
     protected override void OnCreate(Bundle? state)
     {
@@ -40,6 +42,7 @@ public sealed class MainActivity : Activity
         // Credentials/passwords never enter screenshots, recent-task thumbnails or backups.
         Window?.SetFlags(WindowManagerFlags.Secure, WindowManagerFlags.Secure);
         ShowConnect();
+        if (Intent?.GetBooleanExtra("offlineSelfTest", false) != true) TryAutoConnect();
         if (Intent?.GetBooleanExtra("offlineSelfTest", false) == true)
             _ = Run(async () =>
             {
@@ -208,7 +211,7 @@ public sealed class MainActivity : Activity
             view.TextSize = 17; view.SetTextColor(MainActivity.Palette.Text); view.SetSingleLine(false); return view;
         }
     }
-    async Task Run(Func<Task> action)
+    async Task Run(Func<Task> action, bool quiet = false)
     {
         if (busy) return;
         busy = true; activityProgress.Visibility = ViewStates.Visible; foreach (var b in buttons) b.Enabled = false;
@@ -221,7 +224,8 @@ public sealed class MainActivity : Activity
             status.Text = ex is RouterException ? ex.Message :
                 ex is System.Net.Http.HttpRequestException requestFailure ? RouterDiscovery.ConnectionFailure(requestFailure, address?.Text ?? "the selected router") :
                 "The operation could not complete. No success was assumed. Check your connection and try again.";
-            await Message("Operation result", status.Text ?? "Operation failed.");
+            if (quiet) status.Text = "Couldn't reconnect automatically: " + status.Text;
+            else await Message("Operation result", status.Text ?? "Operation failed.");
         }
         finally
         {
@@ -247,40 +251,46 @@ public sealed class MainActivity : Activity
     async Task<bool> Discard() => !dirty || await Confirm("Unsaved changes", "Discard the edits on this page?", "Discard");
     void ShowConnect()
     {
-        Shell("Connect to ARRIS"); dirty = false;
-        var connection = Card("Find your ARRIS", "Join its Wi-Fi, then scan to find its current address.");
-        Action(connection, "Wi-Fi settings", () => { StartActivity(new Intent(Android.Provider.Settings.ActionWifiSettings)); return Task.CompletedTask; });
+        Shell("Arris Control"); dirty = false; addressEdited = false;
+        var prefs = GetSharedPreferences("connection", FileCreationMode.Private)!;
         var records = CredentialStore.Find();
-        var lastAddress = GetSharedPreferences("connection", FileCreationMode.Private)!.GetString("address", records.FirstOrDefault()?.Address ?? "192.168.7.1")!;
-        address = Input(connection, "Router address", lastAddress);
-        Action(connection, "Scan for ARRIS routers", ScanRouters, Tone.Primary);
+        var lastAddress = prefs.GetString("address", records.FirstOrDefault()?.Address ?? "192.168.7.1")!;
         if (records.Count > 0)
         {
-            var saved = Card("Saved routers", "Reconnect locally. No account sign-in or reference import needed.");
-            foreach (var record in records) Action(saved, "Connect to router\n" + record.Serial, () => Connect(record, address.Text!.Trim()));
+            var saved = Card("Your routers", "Connects over your Wi-Fi. No sign-in needed.",
+                chipText: records.Count == 1 ? "Saved" : records.Count + " saved", chipColor: Palette.Success);
+            foreach (var record in records) Action(saved, "Connect\n" + record.Serial, () => Connect(record, AddressOverride()), Tone.Primary);
         }
-        var setup = Card("First-time setup", "Use this once to acquire a local router login.");
-        var account = Column();
-        Action(setup, "ARRIS account sign-in", () => { account.Visibility = account.Visibility == ViewStates.Gone ? ViewStates.Visible : ViewStates.Gone; return Task.CompletedTask; });
-        setup.AddView(account); account.Visibility = ViewStates.Gone;
-        account.AddView(Label("Account passwords and cloud tokens are not saved.", 13));
-        email = Input(account, "ARRIS account email"); email.InputType = InputTypes.ClassText | InputTypes.TextVariationEmailAddress;
-        password = Input(account, "ARRIS account password", secret: true);
-        Action(account, "Use installed SURFboard Central reference", LoadInstalledReference);
-        Action(account, "Choose a reference file", () =>
+        var account = Card(records.Count > 0 ? "Add another router" : "Sign in to get started",
+            "Use your ARRIS / SURFboard Central account. The app finds your router on this Wi-Fi and connects. Your password isn't saved.");
+        email = Input(account, "Account email", prefs.GetString("email", "") ?? "");
+        email.InputType = InputTypes.ClassText | InputTypes.TextVariationEmailAddress;
+        password = Input(account, "Account password", secret: true);
+        if (Build.VERSION.SdkInt >= BuildVersionCodes.O)
         {
-            var intent = new Intent(Intent.ActionOpenDocument); intent.SetType("*/*"); intent.AddCategory(Intent.CategoryOpenable);
-            StartActivityForResult(intent, ImportReference); return Task.CompletedTask;
-        });
-        Action(account, "Sign in and find my routers", Acquire, Tone.Primary);
-        Action(setup, "Use previously acquired credential", async () =>
+            // Account fields (not router credentials) may be filled by the user's password manager.
+            email.ImportantForAutofill = ImportantForAutofill.Yes; email.SetAutofillHints(View.AutofillHintEmailAddress);
+            password.ImportantForAutofill = ImportantForAutofill.Yes; password.SetAutofillHints(View.AutofillHintPassword);
+        }
+        Action(account, "Sign in", EasySignIn, records.Count > 0 ? Tone.Secondary : Tone.Primary);
+
+        var more = Card("More options");
+        var advanced = Column(); advanced.Visibility = ViewStates.Gone;
+        Action(more, "Show more options  ⌄", () => { advanced.Visibility = advanced.Visibility == ViewStates.Gone ? ViewStates.Visible : ViewStates.Gone; return Task.CompletedTask; });
+        more.AddView(advanced);
+        address = Input(advanced, "Router address (only if it changed)", lastAddress);
+        address.TextChanged += (_, _) => addressEdited = true;
+        Action(advanced, "Scan this Wi-Fi for ARRIS routers", ScanRouters);
+        Action(advanced, "Wi-Fi settings", () => { StartActivity(new Intent(Android.Provider.Settings.ActionWifiSettings)); return Task.CompletedTask; });
+        Action(advanced, "Choose a SURFboard Central APK file", PickReferenceFile);
+        Action(advanced, "Use previously acquired credential", async () =>
         {
             if (!Directory.Exists(AcquisitionStore.Folder)) throw new RouterException("No account credential is saved on this installation yet.");
             var file = Directory.EnumerateFiles(AcquisitionStore.Folder, "account-*.json").OrderDescending().FirstOrDefault()
                 ?? throw new RouterException("No saved account credential was found.");
             acquired = await Task.Run(() => AcquisitionStore.Load(file), lifetime.Token); ShowDevices();
         });
-        Action(setup, "Enter a local management login", async () =>
+        Action(advanced, "Enter a local management login", async () =>
         {
             var form = Column(); form.SetPadding(Dp(20), Dp(4), Dp(20), Dp(4));
             var formScroll = new ScrollView(this); formScroll.AddView(form);
@@ -298,8 +308,7 @@ public sealed class MainActivity : Activity
             var device = new CloudDevice("ARRIS mAX", id, hardware); acquired = new(credential, [device]);
             await Verify(device);
         });
-        var newRouter = Card("Set up a new router", "Over Bluetooth, for a factory-reset mAX. Shows each value and asks you to confirm every change.", chipText: "Bluetooth", chipColor: Palette.Accent);
-        Action(newRouter, "Scan over Bluetooth", BleScanAndPick);
+        Action(advanced, "Set up a new router over Bluetooth", BleScanAndPick);
         content.AddView(Label("Local control · credentials encrypted on this phone", 12, color: Palette.Muted));
     }
     async Task ScanRouters()
@@ -320,52 +329,101 @@ public sealed class MainActivity : Activity
         if (selected >= 0)
         {
             address.Text = results[selected].Address;
+            addressEdited = true;
             status.Text = "Router address selected (key " + results[selected].Fingerprint + "). Choose a saved router to connect. Saved routers only accept their pinned key.";
         }
     }
-    async Task LoadInstalledReference()
+    // ---- SURFboard reference: found automatically, so sign-in is just email + password ----
+
+    // Order: saved (encrypted) copy, a copy bundled into a personal build, the installed
+    // SURFboard Central app; only then ask the user (Play Store install or file).
+    async Task<CloudConfiguration?> ResolveConfigurationAsync()
+    {
+        status.Text = "Preparing sign-in…";
+        var (found, alreadySaved) = await Task.Run<(CloudConfiguration? Config, bool Saved)>(() =>
+        {
+            try { if (CloudProtocol.LoadSaved() is { } saved) return (saved, true); } catch (RouterException) { }
+            if (CloudProtocol.LoadEmbedded() is { } embedded) return (embedded, false);
+            return (InstalledReference(), false);
+        }, lifetime.Token);
+        if (found is not null) { if (!alreadySaved) CloudProtocol.Save(found); return found; }
+        var choice = await Choose("Sign-in needs SURFboard Central", [
+            "Install SURFboard Central (recommended)\nFree on Google Play. Arris Control only reads its settings; you don't need to open or set it up.",
+            "Choose a SURFboard Central APK/XAPK file"]);
+        if (choice == 0)
+        {
+            OpenPlayStore();
+            status.Text = "When SURFboard Central has installed, come back and tap Sign in again.";
+            return null;
+        }
+        return choice == 1 ? await PickAndImportReferenceAsync() : null;
+    }
+
+    // Reads the protocol constants from the installed SURFboard Central APK and splits.
+    // Nothing from it is installed, executed or launched. Null when it isn't installed.
+    CloudConfiguration? InstalledReference()
     {
         Android.Content.PM.ApplicationInfo app;
         try { app = PackageManager!.GetApplicationInfo("com.arris.sbc", PackageInfoFlags.MetaData)!; }
-        catch (Android.Content.PM.PackageManager.NameNotFoundException)
-        { throw new RouterException("SURFboard Central is not installed in this Android profile. Use Import protocol reference with your own SURFboard Central 4.3.5 APK/XAPK or BuildConfig.java. A reference is not needed to reconnect with saved local credentials."); }
+        catch (Android.Content.PM.PackageManager.NameNotFoundException) { return null; }
         var paths = new[] { app.SourceDir }.Concat(app.SplitSourceDirs ?? []).Where(p => !string.IsNullOrEmpty(p)).Select(p => p!).ToArray();
-        status.Text = "Reading the installed app's APK and split references…";
-        configuration = await Task.Run(() => CloudProtocol.ReadReferences(paths), lifetime.Token);
-        CloudProtocol.Save(configuration);
-        status.Text = "Protocol reference imported and encrypted on this phone.";
-        await Message("Reference imported", "The supported protocol reference is ready for account sign-in. Saved local credentials do not need this step.");
+        return CloudProtocol.ReadReferences(paths);
     }
+
+    void OpenPlayStore()
+    {
+        try { StartActivity(new Intent(Intent.ActionView, Android.Net.Uri.Parse("market://details?id=com.arris.sbc"))); }
+        catch (ActivityNotFoundException) { StartActivity(new Intent(Intent.ActionView, Android.Net.Uri.Parse("https://play.google.com/store/apps/details?id=com.arris.sbc"))); }
+    }
+
+    async Task<CloudConfiguration?> PickAndImportReferenceAsync()
+    {
+        pickedReference = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var intent = new Intent(Intent.ActionOpenDocument); intent.SetType("*/*"); intent.AddCategory(Intent.CategoryOpenable);
+        StartActivityForResult(intent, ImportReference);
+        var uri = await pickedReference.Task; pickedReference = null;
+        if (uri is null) { status.Text = "No file chosen."; return null; }
+        var imported = await ImportReferenceUri(uri);
+        CloudProtocol.Save(imported); configuration = imported;
+        status.Text = "SURFboard settings imported and encrypted on this phone.";
+        return imported;
+    }
+
     protected override void OnActivityResult(int requestCode, Result resultCode, Intent? data)
     {
         base.OnActivityResult(requestCode, resultCode, data);
-        if (requestCode != ImportReference || resultCode != Result.Ok || data?.Data is not { } uri) return;
-        _ = Run(async () =>
+        if (requestCode == ImportReference) pickedReference?.TrySetResult(resultCode == Result.Ok ? data?.Data : null);
+    }
+
+    async Task<CloudConfiguration> ImportReferenceUri(Android.Net.Uri uri)
+    {
+        // Keep the original extension, including a Java BuildConfig reference.
+        string name = "reference.apk";
+        using (var cursor = ContentResolver!.Query(uri, null, null, null, null))
+            if (cursor?.MoveToFirst() == true) { var column = cursor.GetColumnIndex("_display_name"); if (column >= 0) name = cursor.GetString(column) ?? name; }
+        var extension = Path.GetExtension(name).ToLowerInvariant();
+        if (extension is not (".apk" or ".xapk" or ".java")) throw new RouterException("Select a SURFboard Central APK, XAPK, or BuildConfig.java reference.");
+        var temporary = Path.Combine(CacheDir!.AbsolutePath, Guid.NewGuid().ToString("N") + extension);
+        try
         {
-            // Try the original extension, including a Java BuildConfig reference.
-            string name = "reference.apk";
-            using (var cursor = ContentResolver!.Query(uri, null, null, null, null))
-                if (cursor?.MoveToFirst() == true) { var column = cursor.GetColumnIndex("_display_name"); if (column >= 0) name = cursor.GetString(column) ?? name; }
-            var extension = Path.GetExtension(name).ToLowerInvariant();
-            if (extension is not (".apk" or ".xapk" or ".java")) throw new RouterException("Select a SURFboard Central APK, XAPK, or BuildConfig.java reference.");
-            var temporary = Path.Combine(CacheDir!.AbsolutePath, Guid.NewGuid().ToString("N") + extension);
-            try
+            using (var source = ContentResolver!.OpenInputStream(uri)!)
+            await using (var file = File.Create(temporary))
             {
-                using (var source = ContentResolver!.OpenInputStream(uri)!)
-                await using (var file = File.Create(temporary))
+                var buffer = new byte[65536]; int count; long total = 0;
+                while ((count = await source.ReadAsync(buffer, lifetime.Token)) > 0)
                 {
-                    var buffer = new byte[65536]; int count; long total = 0;
-                    while ((count = await source.ReadAsync(buffer, lifetime.Token)) > 0)
-                    {
-                        total += count; if (total > 300L * 1024 * 1024) throw new RouterException("Reference exceeds 300 MB.");
-                        await file.WriteAsync(buffer.AsMemory(0, count), lifetime.Token);
-                    }
+                    total += count; if (total > 300L * 1024 * 1024) throw new RouterException("Reference exceeds 300 MB.");
+                    await file.WriteAsync(buffer.AsMemory(0, count), lifetime.Token);
                 }
-                configuration = await Task.Run(() => CloudProtocol.ReadReference(temporary), lifetime.Token);
-                CloudProtocol.Save(configuration); status.Text = "Reference imported. You can now sign in.";
             }
-            finally { if (File.Exists(temporary)) File.Delete(temporary); }
-        });
+            return await Task.Run(() => CloudProtocol.ReadReference(temporary), lifetime.Token);
+        }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+    }
+
+    async Task PickReferenceFile()
+    {
+        if (await PickAndImportReferenceAsync() is not null) await Message("Ready", "SURFboard settings imported. Enter your account email and password, then tap Sign in.");
     }
 
     // ---- Bluetooth: scan, read-only inspect, and guided per-write setup ----
@@ -499,29 +557,74 @@ public sealed class MainActivity : Activity
         return new string(chars);
     }
 
-    async Task Acquire()
+    // One tap: sign in, pick the router (automatically if there's one), find it on this
+    // Wi-Fi by its certificate, verify it and connect. No address typing.
+    async Task EasySignIn()
     {
-        configuration ??= CloudProtocol.LoadSaved();
-        if (configuration is null) throw new RouterException("Import a SURFboard Central protocol reference first. Its app client secret is not bundled with Arris Control.");
-        var accountEmail = email.Text!.Trim(); var accountPassword = password.Text!; password.Text = "";
-        AndroidNetwork.UseInternet(); status.Text = "Signing in and reading your account inventory…";
+        var accountEmail = email.Text?.Trim() ?? ""; var accountPassword = password.Text ?? "";
+        if (!System.Net.Mail.MailAddress.TryCreate(accountEmail, out _) || accountPassword.Length == 0)
+            throw new RouterException("Enter your ARRIS account email and password.");
+        GetSharedPreferences("connection", FileCreationMode.Private)!.Edit()!.PutString("email", accountEmail)!.Apply();
+        configuration ??= await ResolveConfigurationAsync();
+        if (configuration is null) return;
+        password.Text = "";
+        AndroidNetwork.UseInternet(); status.Text = "Signing in to your ARRIS account…";
         try
         {
             using var api = new CloudApi();
             acquired = await CloudAcquisition.AcquireAsync(accountEmail, accountPassword, configuration, api, lifetime.Token);
-            AcquisitionStore.Save(acquired); ShowDevices();
         }
         finally { accountPassword = ""; }
+        AcquisitionStore.Save(acquired);
+        await FinishSetupAsync();
     }
+
+    async Task FinishSetupAsync()
+    {
+        var devices = acquired!.Devices;
+        if (devices.Count == 0) { ShowDevices(); throw new RouterException("Your ARRIS account has no routers registered to it."); }
+        var device = devices.Count == 1 ? devices[0] : null;
+        if (device is null)
+        {
+            var index = await Choose("Which router?", devices.Select(d => d.ToString()).ToArray());
+            if (index < 0) { ShowDevices(); return; }
+            device = devices[index];
+        }
+        try { AndroidNetwork.UseLocal(); }
+        catch (RouterException)
+        {
+            ShowDevices();
+            status.Text = "Signed in. Join your router's Wi-Fi, then tap Find my router automatically.";
+            return;
+        }
+        var candidates = AndroidNetwork.Candidates().Distinct().Take(1024).ToArray();
+        var progress = new Progress<ScanProgress>(p => status.Text = $"Looking for your router on this Wi-Fi: {p.Checked}/{p.Total}…");
+        var found = await RouterDiscovery.DiscoverApisAsync(candidates, progress, lifetime.Token);
+        var match = found.Where(e => string.Equals(e.Mac, device.Mac, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (match.Count != 1)
+        {
+            ShowDevices();
+            status.Text = match.Count == 0
+                ? "Signed in, but your router didn't answer on this Wi-Fi. Check you're on its network, or enter its address below and tap it."
+                : "More than one device answered with your router's identity. Enter its address below and tap it.";
+            return;
+        }
+        status.Text = "Found it at " + match[0].Address + ". Verifying…";
+        var record = await CloudAcquisition.VerifyAndSaveAsync(acquired!, device, match[0].Address, lifetime.Token, match[0].Pin);
+        acquired = null; await Connect(record);
+    }
+
     void ShowDevices()
     {
-        var previousAddress = address.Text ?? "192.168.7.1";
-        Shell("Select your Arris");
-        address = Input(content, "Router IPv4 address", previousAddress);
-        content.AddView(Label("Choose the exact unit. The app checks its certificate, serial number and protected routing mode before saving the local credential."));
-        foreach (var device in acquired!.Devices) Action(content, device.ToString(), () => Verify(device), Tone.Primary);
-        if (acquired.Devices.Count == 0) content.AddView(Label("The account returned no supported router identities. You can enter an existing local management credential from the connection screen."));
-        Action(content, "Back to connections", () => { ShowConnect(); return Task.CompletedTask; });
+        var previousAddress = address?.Text ?? "192.168.7.1";
+        Shell("Finish setup");
+        var auto = Card("Find your router", "Make sure this phone is on your router's Wi-Fi.", chipText: "Signed in", chipColor: Palette.Success);
+        Action(auto, "Find my router automatically", FinishSetupAsync, Tone.Primary);
+        var manual = Card("Or enter its address", "Then tap the router. The app checks its certificate, serial and routing mode before saving.");
+        address = Input(manual, "Router IPv4 address", previousAddress);
+        foreach (var device in acquired!.Devices) Action(manual, device.ToString(), () => Verify(device));
+        if (acquired.Devices.Count == 0) manual.AddView(Label("The account returned no supported router identities. You can enter an existing local management login under More options.", 13));
+        Action(content, "Back", () => { ShowConnect(); return Task.CompletedTask; });
     }
     async Task Verify(CloudDevice device)
     {
@@ -530,6 +633,18 @@ public sealed class MainActivity : Activity
         var record = await CloudAcquisition.VerifyAndSaveAsync(acquired!, device, target, lifetime.Token, scannedPins.GetValueOrDefault(target));
         acquired = null; await Connect(record);
     }
+
+    // On launch, quietly reconnect to the last-used (or only) saved router when on Wi-Fi.
+    void TryAutoConnect()
+    {
+        var records = CredentialStore.Find();
+        if (records.Count == 0 || !AndroidNetwork.HasLocalNetwork) return;
+        var last = GetSharedPreferences("connection", FileCreationMode.Private)!.GetString("serial", null);
+        var record = records.FirstOrDefault(r => r.Serial == last) ?? (records.Count == 1 ? records[0] : null);
+        if (record is not null) _ = Run(() => Connect(record), quiet: true);
+    }
+    string? AddressOverride() => addressEdited && !string.IsNullOrWhiteSpace(address?.Text) ? address.Text!.Trim() : null;
+
     async Task Connect(CredentialRecord record, string? addressOverride = null)
     {
         if (!string.IsNullOrEmpty(addressOverride))
@@ -540,7 +655,7 @@ public sealed class MainActivity : Activity
         status.Text = "Connecting to " + record.Address + "…"; client?.Dispose(); client = new(record);
         client.Progress = message => RunOnUiThread(() => { if (!IsDestroyed) status.Text = message; });
         await Task.Run(() => client.ConnectAsync(lifetime.Token), lifetime.Token); dirty = false;
-        GetSharedPreferences("connection", FileCreationMode.Private)!.Edit()!.PutString("address", client.Record.Address)!.Apply();
+        GetSharedPreferences("connection", FileCreationMode.Private)!.Edit()!.PutString("address", client.Record.Address)!.PutString("serial", client.Record.Serial)!.Apply();
         currentPage = Catalog.Pages[0]; ShowRouter(); await Read();
     }
     void ShowRouter()
