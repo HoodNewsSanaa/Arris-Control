@@ -31,9 +31,9 @@ for _ in range(45):
     adb('shell', 'uiautomator', 'dump', '/sdcard/arris-ui.xml')
     ui = adb('shell', 'cat', '/sdcard/arris-ui.xml')
     if 'PASS: Android API scan, HTTPS login and reconnect.' in ui:
-        if fixture.logins != 2 or fixture.anonymous_reads < 1 or fixture.protected_reads < 6:
-            raise SystemExit('Fixture did not observe the expected anonymous scan and two authenticated sessions')
-        print('PASS: APK UI, Android Keystore, anonymous API scan, actual HTTPS login/cookies, saved address update and reconnect.')
+        if fixture.logins != 3 or fixture.anonymous_reads < 1 or fixture.protected_reads < 9:
+            raise SystemExit('Fixture did not observe the expected anonymous scan and exactly three authenticated sessions (none from the impostor check)')
+        print('PASS: APK UI, Android Keystore, anonymous API scan, actual HTTPS login/cookies, saved address update, reconnect, certificate-pin impostor refusal and legacy pin upgrade.')
         adb('root')
         adb('wait-for-device')
         adb('pull', '/data/user/0/com.hoodnewssanaa.arriscontrol/cache/ui-preview.png', 'artifacts/Android-UI-preview.png')

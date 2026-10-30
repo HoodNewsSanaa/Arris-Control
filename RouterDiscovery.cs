@@ -48,7 +48,7 @@ internal static class RouterDiscovery
     internal static bool CertificateMatches(X509Certificate2 certificate,string mac,DateTime now)=>
         certificate.GetNameInfo(X509NameType.SimpleName,false).Equals(mac,StringComparison.OrdinalIgnoreCase) &&
         now>=certificate.NotBefore && now<=certificate.NotAfter;
-    internal static async Task<bool> MatchesAsync(string address,string mac,CancellationToken token)
+    internal static async Task<bool> MatchesAsync(string address,string mac,string? pin,CancellationToken token)
     {
         if(!CredentialStore.IsPrivate(address))return false;
         using var timeout=CancellationTokenSource.CreateLinkedTokenSource(token);timeout.CancelAfter(TimeSpan.FromSeconds(2));
@@ -56,7 +56,12 @@ internal static class RouterDiscovery
         try
         {
             await socket.ConnectAsync(address,50011,timeout.Token);
-            using var ssl=new SslStream(socket.GetStream(),false,(_,cert,_,_)=>cert is not null && CertificateMatches(new X509Certificate2(cert),mac,DateTime.Now));
+            using var ssl=new SslStream(socket.GetStream(),false,(_,cert,_,_)=>
+            {
+                if(cert is null)return false;
+                using var certificate=new X509Certificate2(cert);
+                return CertificatePin.Accepts(certificate,mac,pin,DateTime.Now);
+            });
             await ssl.AuthenticateAsClientAsync(new SslClientAuthenticationOptions{TargetHost=address},timeout.Token);
             return true;
         }
@@ -64,9 +69,11 @@ internal static class RouterDiscovery
         {token.ThrowIfCancellationRequested();return false;}
     }
     internal static async Task<string> ResolveAsync(string saved,string mac,IEnumerable<string> candidates,
-        Func<string,string,CancellationToken,Task<bool>> probe,CancellationToken token)
+        Func<string,string,CancellationToken,Task<bool>> probe,CancellationToken token,bool savedOnly=false)
     {
         if(await probe(saved,mac,token))return saved;
+        // Without a pinned certificate, any LAN host could copy the MAC CN, so never scan.
+        if(savedOnly)throw new RouterException($"This credential was saved before router certificates were pinned, so it only connects at its saved address ({saved}). The router did not answer there. Connect once at the router's current address, or acquire the credential again; no credential was sent.");
         var matches=new ConcurrentBag<string>();
         await Parallel.ForEachAsync(candidates.Where(CredentialStore.IsPrivate).Where(a=>a!=saved).Distinct().Take(1024),
             new ParallelOptions{MaxDegreeOfParallelism=32,CancellationToken=token},async(address,ct)=>
@@ -97,7 +104,7 @@ internal static class RouterDiscovery
     {
         if(!CredentialStore.IsPrivate(address)) return null;
         using var timeout=CancellationTokenSource.CreateLinkedTokenSource(token);timeout.CancelAfter(TimeSpan.FromSeconds(3));
-        string? mac=null;
+        string? mac=null,pin=null;
         try
         {
             using(var socket=new TcpClient())
@@ -111,19 +118,20 @@ internal static class RouterDiscovery
                     if(!System.Text.RegularExpressions.Regex.IsMatch(name,"^[A-F0-9]{12}$") ||
                        !certificate.Subject.Contains("ARRIS",StringComparison.OrdinalIgnoreCase) ||
                        !CertificateMatches(certificate,name,DateTime.Now)) return false;
-                    mac=name;return true;
+                    mac=name;pin=CertificatePin.Compute(certificate);return true;
                 });
                 await ssl.AuthenticateAsClientAsync(new SslClientAuthenticationOptions{TargetHost=address},timeout.Token);
             }
-            if(mac is null) return null;
-            // A certificate alone is not enough: make one fixed, anonymous, read-only API query.
-            using var wire=new LocalWire(new CredentialRecord("","",mac,address));
+            if(mac is null || pin is null) return null;
+            // A certificate alone is not enough: make one fixed, anonymous, read-only API query,
+            // requiring the same certificate that answered the handshake above.
+            using var wire=new LocalWire(new CredentialRecord("","",mac,address),pin);
             try
             {
                 await wire.SendAsync("/getData?key=DEVICEOPERMODE_ALL",null,timeout.Token);
-                return new(address,mac,"OK");
+                return new(address,mac,"OK",pin);
             }
-            catch(RouterException ex) when(ex.Code=="SessionTimeout") { return new(address,mac,"SessionTimeout"); }
+            catch(RouterException ex) when(ex.Code=="SessionTimeout") { return new(address,mac,"SessionTimeout",pin); }
         }
         catch(Exception ex) when(ex is SocketException or System.IO.IOException or AuthenticationException or System.Net.Http.HttpRequestException or OperationCanceledException or RouterException)
         { token.ThrowIfCancellationRequested(); }
@@ -144,9 +152,15 @@ internal static class RouterDiscovery
     }
     public static Task<List<RouterApiEndpoint>> DiscoverApisAsync(IEnumerable<string> addresses,IProgress<ScanProgress>? progress,CancellationToken token) =>
         DiscoverApisAsync(addresses,ProbeApiAsync,progress,token);
-    public static Task<string> ResolveAsync(CredentialRecord record,CancellationToken token)=>
-        ResolveAsync(record.Address,record.Mac,Candidates(record.Address),MatchesAsync,token);
+    /// <summary>With a pin, scans connected subnets for exactly that certificate. Without one
+    /// (credential saved before pinning), only the saved or user-entered address is tried.</summary>
+    public static Task<string> ResolveAsync(CredentialRecord record,string? pin,CancellationToken token)=>pin is null
+        ? ResolveAsync(record.Address,record.Mac,[],(a,m,ct)=>MatchesAsync(a,m,null,ct),token,savedOnly:true)
+        : ResolveAsync(record.Address,record.Mac,Candidates(record.Address),(a,m,ct)=>MatchesAsync(a,m,pin,ct),token);
 }
 
-internal sealed record RouterApiEndpoint(string Address, string Mac, string Status);
+internal sealed record RouterApiEndpoint(string Address, string Mac, string Status, string Pin="")
+{
+    public string Fingerprint => CertificatePin.IsValid(Pin) ? CertificatePin.Fingerprint(Pin) : "unknown";
+}
 internal sealed record ScanProgress(int Checked, int Total);

@@ -20,13 +20,41 @@ internal record CredentialRecord(string Path, string Serial, string Mac, string 
 {
     public override string ToString() => $"{Address} · {Serial}";
 }
-internal record RouterCredential(string UserName, string Password)
+// CertificatePin lives only inside the encrypted payload, so editing the plaintext
+// record metadata (for example RouterAddress) cannot redirect a login elsewhere.
+internal record RouterCredential(string UserName, string Password, string? CertificatePin=null)
 {
     public override string ToString()=>"Router credential (values withheld)";
 }
 internal class RouterException(string message, string code = "") : Exception(message)
 {
     public string Code { get; } = code;
+}
+
+/// <summary>
+/// SHA-256 pin of the router's TLS public key (SubjectPublicKeyInfo, base64).
+/// The certificate CN is the router MAC. Any LAN client can read it from the real router
+/// and copy it into a self-signed certificate, so the CN alone does not identify the unit.
+/// </summary>
+internal static class CertificatePin
+{
+    public static string Compute(X509Certificate2 certificate)=>
+        Convert.ToBase64String(SHA256.HashData(certificate.PublicKey.ExportSubjectPublicKeyInfo()));
+    public static bool IsValid(string? pin)=>pin is not null && Regex.IsMatch(pin,"^[A-Za-z0-9+/]{43}=$");
+    /// <summary>MAC CN and validity dates; when a pin is known, also an exact public-key match.</summary>
+    public static bool Accepts(X509Certificate2 certificate,string mac,string? pin,DateTime now)
+    {
+        if(!RouterDiscovery.CertificateMatches(certificate,mac,now))return false;
+        if(pin is null)return true;
+        if(!IsValid(pin))return false;
+        return CryptographicOperations.FixedTimeEquals(Encoding.ASCII.GetBytes(Compute(certificate)),Encoding.ASCII.GetBytes(pin));
+    }
+    /// <summary>Short, human-comparable form for display.</summary>
+    public static string Fingerprint(string pin)
+    {
+        var hex=Convert.ToHexString(Convert.FromBase64String(pin));
+        return string.Join(":",Enumerable.Range(0,8).Select(i=>hex.Substring(i*2,2)));
+    }
 }
 
 internal static class Catalog
@@ -118,8 +146,14 @@ internal static class CredentialStore
             using var doc=JsonDocument.Parse(plain);
             var user=doc.RootElement.GetProperty("UserName").GetString();var pass=doc.RootElement.GetProperty("Password").GetString();
             if(string.IsNullOrEmpty(user)||string.IsNullOrEmpty(pass)) throw new RouterException("Empty local credential.");
+            string? pin=null;
+            if(doc.RootElement.TryGetProperty("CertificatePin",out var pinned) && pinned.ValueKind!=JsonValueKind.Null)
+            {
+                pin=pinned.ValueKind==JsonValueKind.String?pinned.GetString():null;
+                if(!CertificatePin.IsValid(pin))throw new RouterException("This credential contains an invalid router certificate pin. Acquire the credential again.");
+            }
             if(preserve)PreserveLoaded(r);
-            return new(user,pass);
+            return new(user,pass,pin);
         }
         catch(CryptographicException){throw new RouterException("This device could not open this credential. Use the device and account that created this credential. Windows DPAPI files cannot be opened on Android.");}
         finally{CryptographicOperations.ZeroMemory(cipher);CryptographicOperations.ZeroMemory(entropy);if(plain is not null) CryptographicOperations.ZeroMemory(plain);}
@@ -153,10 +187,14 @@ internal static class CredentialStore
         try{File.WriteAllText(temporary,root.ToJsonString(new JsonSerializerOptions{WriteIndented=true}));File.Move(temporary,target);return Inspect(target);}
         finally{if(File.Exists(temporary))File.Delete(temporary);}
     }
-    public static CredentialRecord SaveVerified(RouterCredential credential,CloudDevice device,string address,string? directory=null)
+    /// <summary>Saves a credential verified by local login. The certificate pin observed during
+    /// that login is encrypted with the credential and required on every later connection.</summary>
+    public static CredentialRecord SaveVerified(RouterCredential credential,CloudDevice device,string address,string certificatePin,string? directory=null,
+        string verifiedVia="Cloud account SSO then direct local login and protected serial/mode reads")
     {
         if(!IsPrivate(address) || !Regex.IsMatch(device.Serial,"^[A-Z0-9]{12,24}$") || !Regex.IsMatch(device.Mac,"^[A-F0-9]{12}$"))throw new RouterException("Invalid target identity for credential storage.");
-        var plain=JsonSerializer.SerializeToUtf8Bytes(credential);var entropy=Encoding.UTF8.GetBytes($"ArrisLocalCredential.v1|{device.Serial}|{device.Mac}");byte[]? check=null;string? temporary=null;
+        if(!CertificatePin.IsValid(certificatePin))throw new RouterException("The router certificate could not be pinned. No credential was saved.");
+        var plain=JsonSerializer.SerializeToUtf8Bytes(credential with{CertificatePin=certificatePin});var entropy=Encoding.UTF8.GetBytes($"ArrisLocalCredential.v1|{device.Serial}|{device.Mac}");byte[]? check=null;string? temporary=null;
         try
         {
             var cipher=CredentialProtection.Protect(plain,entropy);
@@ -164,13 +202,22 @@ internal static class CredentialStore
             if(!CryptographicOperations.FixedTimeEquals(plain,check))throw new RouterException("Credential-protection verification failed. No record was saved.");
             var record=new{Format="ARRIS-LocalCredential",Version=1,TargetSerial=device.Serial,ExpectedMac=device.Mac,RouterAddress=address,
                 CreatedAtUTC=DateTimeOffset.UtcNow,Protection=CredentialProtection.Description,LocalAuthenticationVerified=true,
-                CredentialVerifiedVia="Cloud account SSO then direct local login and protected serial/mode reads",CloudTokensSaved=false,Ciphertext=Convert.ToBase64String(cipher)};
+                CredentialVerifiedVia=verifiedVia,CertificatePinned=true,CloudTokensSaved=false,Ciphertext=Convert.ToBase64String(cipher)};
             var folder=directory??UserDirectory;Directory.CreateDirectory(folder);var target=Path.Combine(folder,$"{device.Serial}-{DateTime.UtcNow:yyyyMMddTHHmmssfffffffZ}-{Guid.NewGuid():N}.json");
             temporary=target+".tmp";File.WriteAllText(temporary,JsonSerializer.Serialize(record,new JsonSerializerOptions{WriteIndented=true}));File.Move(temporary,target);temporary=null;
             return Inspect(target);
         }
         catch(CryptographicException){throw new RouterException("This device could not protect this credential for the current user. Nothing was saved; plaintext storage is not used.");}
         finally{CryptographicOperations.ZeroMemory(plain);CryptographicOperations.ZeroMemory(entropy);if(check is not null)CryptographicOperations.ZeroMemory(check);if(temporary is not null && File.Exists(temporary))File.Delete(temporary);}
+    }
+    /// <summary>Upgrades a credential saved before pinning existed: re-encrypts it with the pin
+    /// observed during a successful login at its saved address. The original record is kept.</summary>
+    internal static CredentialRecord SavePinned(CredentialRecord original,RouterCredential credential,string address,string certificatePin,string? directory=null)
+    {
+        var verified=Inspect(original.Path);
+        if(verified.Serial!=original.Serial || verified.Mac!=original.Mac)throw new RouterException("Credential metadata changed during verification.");
+        return SaveVerified(credential,new CloudDevice("",original.Serial,original.Mac),address,certificatePin,directory,
+            "Earlier verified credential; certificate pinned at a local login with authenticated serial/mode reads");
     }
 }
 
@@ -180,18 +227,29 @@ internal interface IRouterWire : IDisposable
 }
 internal sealed class LocalWire : IRouterWire
 {
-    readonly HttpClient client;readonly Uri origin;string? cookie;
-    public LocalWire(CredentialRecord r)
+    readonly HttpClient client;readonly Uri origin;string? cookie;readonly object gate=new();string? observedPin;
+    /// <summary>Public-key pin of the certificate this connection accepted. With no expected pin
+    /// (first verification), the first certificate seen is locked in for the wire's lifetime.</summary>
+    public string? ObservedPin{get{lock(gate)return observedPin;}}
+    public LocalWire(CredentialRecord r,string? expectedPin=null)
     {
         if(!CredentialStore.IsPrivate(r.Address))throw new RouterException("A private router IPv4 address is required.");
+        if(expectedPin is not null && !CertificatePin.IsValid(expectedPin))throw new RouterException("Invalid router certificate pin.");
 #if ANDROID
         AndroidNetwork.UseLocal();
 #endif
         origin=new Uri($"https://{r.Address}:50011/");
         var handler=new HttpClientHandler{AllowAutoRedirect=false,UseCookies=false,UseProxy=false};
-        handler.ServerCertificateCustomValidationCallback=(_,cert,_,_)=>cert is not null &&
-            cert.GetNameInfo(X509NameType.SimpleName,false).Equals(r.Mac,StringComparison.OrdinalIgnoreCase) &&
-            DateTime.Now>=cert.NotBefore && DateTime.Now<=cert.NotAfter;
+        handler.ServerCertificateCustomValidationCallback=(_,cert,_,_)=>
+        {
+            if(cert is null || !CertificatePin.Accepts(cert,r.Mac,expectedPin,DateTime.Now))return false;
+            var pin=CertificatePin.Compute(cert);
+            lock(gate)
+            {
+                if(observedPin is null){observedPin=pin;return true;}
+                return observedPin==pin;
+            }
+        };
         client=new HttpClient(handler){Timeout=TimeSpan.FromSeconds(15)};
     }
     public async Task<JsonObject> SendAsync(string path,string? body=null,CancellationToken token=default)
@@ -228,7 +286,7 @@ internal sealed class LocalWire : IRouterWire
 
 internal sealed class RouterClient : IDisposable
 {
-    CredentialRecord record;IRouterWire wire;bool authenticated;readonly bool testTransport;
+    CredentialRecord record;IRouterWire wire;bool authenticated;readonly bool testTransport;string? pin;
     public CredentialRecord Record=>record;
     public Action<string>? Progress {get;set;}
     public RouterClient(CredentialRecord r,IRouterWire? testWire=null){record=r;wire=testWire??new LocalWire(r);authenticated=testWire is not null;testTransport=testWire is not null;}
@@ -253,24 +311,39 @@ internal sealed class RouterClient : IDisposable
 #if ANDROID
         AndroidNetwork.UseLocal();
 #endif
-        Progress?.Invoke("Locating the selected router on local networks…");
-        var address=await RouterDiscovery.ResolveAsync(record,token);
-        if(address!=record.Address)authenticated=false;
-        if(authenticated)return;
-        wire.Dispose();wire=new LocalWire(record with{Address=address});
+        if(authenticated && pin is not null)
+        {
+            Progress?.Invoke("Locating the selected router on local networks…");
+            if(await RouterDiscovery.ResolveAsync(record,pin,token)==record.Address)return;
+            authenticated=false;
+        }
         var previous=CredentialStore.Inspect(record.Path);
         if(previous.Serial!=record.Serial || previous.Mac!=record.Mac)throw new RouterException("Credential identity changed during discovery.");
-        // The encrypted record still contains its old address until serial/mode verification succeeds.
-        var credential=CredentialStore.Load(previous);
+        // The pin comes from the encrypted payload, never from editable record metadata.
+        var credential=CredentialStore.Load(previous);pin=credential.CertificatePin;
+        Progress?.Invoke(pin is null?"Checking the saved router address (certificate not yet pinned)…":"Locating the selected router on local networks…");
+        var address=await RouterDiscovery.ResolveAsync(record,pin,token);
+        wire.Dispose();var local=new LocalWire(record with{Address=address},pin);wire=local;
         Progress?.Invoke("Verifying local router identity at "+address+"…");
         await wire.SendAsync("/loginAction",LoginBody(credential.UserName,credential.Password,"abcxyz123_windows_"+Guid.NewGuid().ToString("N"),DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()),token);
         await VerifyIdentityAsync(token);_ = await ReadAsync("DEVICEOPERMODE_ALL",token);authenticated=true;
         record=record with{Address=address};
-        if(address!=previous.Address)
+        try
         {
-            try{record=CredentialStore.SaveVerifiedAddress(previous,address);}
-            catch(Exception ex) when(ex is IOException or UnauthorizedAccessException){Progress?.Invoke("Connected at "+address+"; the updated profile could not be saved.");}
+            if(pin is null)
+            {
+                var observed=local.ObservedPin;
+                if(CertificatePin.IsValid(observed))
+                {
+                    pin=observed; // keep this session pinned even if saving the upgraded record fails
+                    record=CredentialStore.SavePinned(previous,credential,address,observed!);
+                    Progress?.Invoke("Router certificate pinned ("+CertificatePin.Fingerprint(observed!)+"). Future connections require this exact certificate.");
+                }
+            }
+            else if(address!=previous.Address)record=CredentialStore.SaveVerifiedAddress(previous,address);
         }
+        catch(Exception ex) when(ex is IOException or UnauthorizedAccessException or RouterException)
+        {Progress?.Invoke("Connected at "+address+"; the updated profile could not be saved.");}
     }
     internal async Task VerifyIdentityAsync(CancellationToken token=default)
     {

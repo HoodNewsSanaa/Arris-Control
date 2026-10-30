@@ -1,3 +1,10 @@
+Certificate pinning update (0.2.0):
+
+- The router's TLS public key is pinned inside the encrypted credential at the first successful login. Reconnects, discovery and scan follow-ups refuse any other certificate before sending a credential, closing a same-network impostor gap where a copied MAC common name was accepted.
+- Scan results show a short key fingerprint, and first-time verification at a scanned address requires that same key.
+- Credentials saved by earlier previews connect only at their saved or entered address, then upgrade to a pinned version automatically.
+- CI now also checks that an impostor certificate gets no login and that an older credential upgrades against the HTTPS fixture.
+
 Touchscreen and discovery update (0.1.1):
 
 - Black-and-white interface with large touch targets, rounded outlined cards, expandable first-time setup, large option pickers and persistent settings navigation.

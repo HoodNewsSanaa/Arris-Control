@@ -11,15 +11,17 @@ internal static class RouterNetworkSelfTests
         const string mac="001122334455";
         AndroidNetwork.UseLocal();
         var endpoints=await RouterDiscovery.DiscoverApisAsync([host],null,token);
-        if(endpoints.Count!=1 || endpoints[0].Mac!=mac || endpoints[0].Status!="SessionTimeout")
+        if(endpoints.Count!=1 || endpoints[0].Mac!=mac || endpoints[0].Status!="SessionTimeout" || !CertificatePin.IsValid(endpoints[0].Pin))
             throw new InvalidOperationException("Anonymous ARRIS API discovery failed against the TLS fixture.");
+        var pin=endpoints[0].Pin;
         var directory=Path.Combine(Path.GetTempPath(),"router-network-test-"+Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
-        string? updatedPath=null, preservedPath=null;
+        string? updatedPath=null, preservedPath=null, pinnedPath=null, legacyPreserved=null;
         try
         {
             var device=new CloudDevice("Fixture mAX","TESTSERIAL123",mac);
-            var saved=CredentialStore.SaveVerified(new("test@example.com","FictionalLocalPassword123!"),device,"10.0.2.3",directory);
+            var login=new RouterCredential("test@example.com","FictionalLocalPassword123!");
+            var saved=CredentialStore.SaveVerified(login,device,"10.0.2.3",pin,directory);
             var hash=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(saved.Path)));
             preservedPath=Path.Combine(CredentialStore.UserDirectory,$"loaded-{saved.Serial}-{saved.Mac}-{hash}.json");
             // This is the same address override the Android saved-router action now supplies.
@@ -40,12 +42,38 @@ internal static class RouterNetworkSelfTests
                 if(page.Reads.Count!=1 || !page.Reads[0].Readable)
                     throw new InvalidOperationException("Reconnecting from the encrypted saved credential failed.");
             }
-            Console.WriteLine("PASS: anonymous scan, native Android HTTPS login, cookie handling, verified address update and reconnect.");
+            // An impostor: same MAC common name, different key. The TLS check must fail before any login is sent.
+            var wrongPin=Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData("not the fixture key"u8.ToArray()));
+            using(var impostor=new LocalWire(saved with { Address=host },wrongPin))
+            {
+                var refused=false;
+                try{await impostor.SendAsync("/loginAction",RouterClient.LoginBody(login.UserName,login.Password,"pin-test",0),token);}
+                // Any transport failure counts; a router reply (RouterException) or success means TLS was accepted.
+                catch(Exception ex) when(ex is not RouterException and not InvalidOperationException){refused=true;}
+                if(!refused)throw new InvalidOperationException("A certificate that does not match the pin was accepted.");
+            }
+            // A credential saved before pinning connects only at its saved address, then upgrades to a pinned version.
+            var payload=new JsonObject{["UserName"]=login.UserName,["Password"]=login.Password}.ToJsonString();
+            var cipher=CredentialProtection.Protect(System.Text.Encoding.UTF8.GetBytes(payload),System.Text.Encoding.UTF8.GetBytes($"ArrisLocalCredential.v1|{device.Serial}|{mac}"));
+            var legacyFile=Path.Combine(directory,"legacy.json");
+            File.WriteAllText(legacyFile,new JsonObject{["Format"]="ARRIS-LocalCredential",["Version"]=1,["TargetSerial"]=device.Serial,["ExpectedMac"]=mac,
+                ["RouterAddress"]=host,["Ciphertext"]=Convert.ToBase64String(cipher)}.ToJsonString());
+            legacyPreserved=Path.Combine(CredentialStore.UserDirectory,$"loaded-{device.Serial}-{mac}-{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(legacyFile)))}.json");
+            using(var legacy=new RouterClient(CredentialStore.Inspect(legacyFile)))
+            {
+                await legacy.ConnectAsync(token);
+                pinnedPath=legacy.Record.Path;
+                if(pinnedPath==legacyFile || CredentialStore.Load(legacy.Record,false).CertificatePin!=pin)
+                    throw new InvalidOperationException("The legacy credential was not upgraded to the fixture's certificate pin.");
+            }
+            Console.WriteLine("PASS: anonymous scan with pin, native Android HTTPS login, cookie handling, verified address update, reconnect, impostor refusal and legacy pin upgrade.");
         }
         finally
         {
             if(updatedPath is not null && File.Exists(updatedPath)) File.Delete(updatedPath);
             if(preservedPath is not null && File.Exists(preservedPath)) File.Delete(preservedPath);
+            if(pinnedPath is not null && File.Exists(pinnedPath)) File.Delete(pinnedPath);
+            if(legacyPreserved is not null && File.Exists(legacyPreserved)) File.Delete(legacyPreserved);
             foreach(var path in Directory.EnumerateFiles(directory)) File.Delete(path);
             Directory.Delete(directory);
         }

@@ -27,6 +27,8 @@ public sealed class MainActivity : Activity
     CancellationTokenSource lifetime = new();
     readonly List<Button> buttons = [];
     bool busy, dirty;
+    // Certificate pins seen by the last scan, so first-time verification requires the same certificate.
+    readonly Dictionary<string, string> scannedPins = new(StringComparer.Ordinal);
     const int ImportReference = 41;
 
     protected override void OnCreate(Bundle? state)
@@ -264,11 +266,13 @@ public sealed class MainActivity : Activity
             await Message("No ARRIS API found", "No matching ARRIS HTTPS API responded on this connected subnet. Check the Wi-Fi connection, client isolation, and the unit's power/cabling. The scan sends no credentials.");
             return;
         }
-        var selected = await Choose("ARRIS routers found", results.Select(r => r.Address + "\nAPI responds · " + r.Mac).ToArray());
+        scannedPins.Clear();
+        foreach (var result in results) if (CertificatePin.IsValid(result.Pin)) scannedPins[result.Address] = result.Pin;
+        var selected = await Choose("ARRIS routers found", results.Select(r => r.Address + "\nAPI responds · " + r.Mac + "\nKey " + r.Fingerprint).ToArray());
         if (selected >= 0)
         {
             address.Text = results[selected].Address;
-            status.Text = "Router address selected. Choose a saved router to connect.";
+            status.Text = "Router address selected (key " + results[selected].Fingerprint + "). Choose a saved router to connect. Saved routers only accept their pinned key.";
         }
     }
     async Task LoadInstalledReference()
@@ -342,7 +346,8 @@ public sealed class MainActivity : Activity
     async Task Verify(CloudDevice device)
     {
         status.Text = "Verifying the selected router locally…"; AndroidNetwork.UseLocal();
-        var record = await CloudAcquisition.VerifyAndSaveAsync(acquired!, device, address.Text!.Trim(), lifetime.Token);
+        var target = address.Text!.Trim();
+        var record = await CloudAcquisition.VerifyAndSaveAsync(acquired!, device, target, lifetime.Token, scannedPins.GetValueOrDefault(target));
         acquired = null; await Connect(record);
     }
     async Task Connect(CredentialRecord record, string? addressOverride = null)

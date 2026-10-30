@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.IO;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Json.Nodes;
 
 namespace ArrisControl;
@@ -32,6 +34,11 @@ internal static class DiscoverySelfTests
             try{await RouterDiscovery.ResolveAsync("192.168.7.1","001122334455",["192.168.1.100"],(a,m,ct)=>Task.FromCanceled<bool>(ct),cancel.Token);}catch(OperationCanceledException){cancelled=true;}
             Check(cancelled,"Discovery cancellation was lost.");
         }
+        calls.Clear();var legacyRefused=false;
+        try{await RouterDiscovery.ResolveAsync("192.168.7.1","001122334455",["192.168.1.100"],(a,m,ct)=>{calls.Add(a);return Task.FromResult(a=="192.168.1.100");},default,savedOnly:true);}
+        catch(RouterException){legacyRefused=true;}
+        Check(legacyRefused && calls.Count==1 && calls.Contains("192.168.7.1"),"An unpinned credential scanned beyond its saved address.");
+        PinChecks();
         var scanned=new ConcurrentBag<string>();
         Task<RouterApiEndpoint?> Probe(string a,CancellationToken ct)
         {
@@ -56,6 +63,32 @@ internal static class DiscoverySelfTests
             bool refused=false;try{CredentialStore.SaveVerifiedAddress(old,"8.8.8.8",folder);}catch(RouterException){refused=true;}Check(refused,"Public profile destination accepted.");
         }
         finally{foreach(var path in Directory.EnumerateFiles(folder))File.Delete(path);Directory.Delete(folder);}
-        Console.WriteLine("PASS: offline discovery selection, network bounds, ambiguity, cancellation, and encrypted profile address retention. No sockets or real credentials.");
+        Console.WriteLine("PASS: offline discovery selection, network bounds, ambiguity, cancellation, unpinned saved-address limit, and encrypted profile address retention. No sockets or real credentials.");
+    }
+    static void PinChecks()
+    {
+        X509Certificate2 router,impostor,expired;
+        try{router=Fixture(-1,1);impostor=Fixture(-1,1);expired=Fixture(-3,-1);}
+        catch(Exception ex) when(ex is PlatformNotSupportedException or CryptographicException)
+        {Console.WriteLine("SKIP: self-signed certificate fixtures are unavailable on this platform; pin checks run in the portable and Windows suites.");return;}
+        using(router)using(impostor)using(expired)
+        {
+            const string mac="001122334455";var now=DateTime.Now;var pin=CertificatePin.Compute(router);
+            Check(CertificatePin.IsValid(pin) && !CertificatePin.IsValid("abc") && !CertificatePin.IsValid(null),"Certificate pin format validation failed.");
+            using(var reloaded=X509CertificateLoader.LoadCertificate(router.RawData))Check(CertificatePin.Compute(reloaded)==pin,"Certificate pin is not stable across loads.");
+            Check(CertificatePin.Accepts(router,mac,pin,now),"The pinned router certificate was rejected.");
+            Check(!CertificatePin.Accepts(impostor,mac,pin,now),"An impostor certificate with a copied MAC common name was accepted.");
+            Check(!CertificatePin.Accepts(router,"AABBCCDDEEFF",pin,now),"A certificate for another MAC was accepted.");
+            Check(!CertificatePin.Accepts(expired,mac,CertificatePin.Compute(expired),now),"An expired pinned certificate was accepted.");
+            Check(!CertificatePin.Accepts(router,mac,"not-a-pin",now),"A malformed pin was accepted.");
+            Check(CertificatePin.Fingerprint(pin).Length==23,"Certificate fingerprint format changed.");
+        }
+        Console.WriteLine("PASS: certificate public-key pinning rejects copied-MAC impostors, other MACs, expired and malformed pins.");
+    }
+    static X509Certificate2 Fixture(int fromDays,int toDays)
+    {
+        using var key=RSA.Create(2048);
+        var request=new CertificateRequest("CN=001122334455, O=ARRIS Test Fixture",key,HashAlgorithmName.SHA256,RSASignaturePadding.Pkcs1);
+        return request.CreateSelfSigned(DateTimeOffset.Now.AddDays(fromDays),DateTimeOffset.Now.AddDays(toDays));
     }
 }
