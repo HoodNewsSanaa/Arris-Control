@@ -14,7 +14,7 @@ internal static class SelfTests
             ["DEVICEOPERMODE_ALL"]=new JsonObject{["STATUS"]="OK",["DEVICEOPERMODE"]=new JsonObject{["MODE"]="DUAL"}},
             ["DEVICE_INFO_ALL"]=JsonNode.Parse("{\"STATUS\":\"OK\",\"DEVICE_INFO\":{\"SERIAL_KEY\":\"TESTSERIAL123\"}}")!.AsObject(),
             ["NETWORKDNS_ALL"]=JsonNode.Parse("{\"STATUS\":\"OK\",\"NETWORKDNS\":{\"DYNAMICV4\":\"0\",\"DNSIPV4SERVERS\":\"8.8.8.8,1.1.1.1\",\"DYNAMICV6\":\"1\",\"DNSIPV6SERVERS\":\"0.0.0.0,0.0.0.0\"}}")!.AsObject()};
-        public int Writes;public bool LoseWriteReply;
+        public int Writes;public bool LoseWriteReply;public int TimeoutsRemaining;
         public Task<JsonObject> SendAsync(string path,string? body=null,CancellationToken token=default)
         {
             if(path=="/setData")
@@ -28,6 +28,7 @@ internal static class SelfTests
                 return Task.FromResult(new JsonObject{["STATUS"]="OK"});
             }
             if(!path.StartsWith("/getData?key=",StringComparison.Ordinal))throw new InvalidOperationException("Unexpected fake request");
+            if(TimeoutsRemaining>0){TimeoutsRemaining--;throw new RouterException("Router status: SessionTimeout","SessionTimeout");}
             return Task.FromResult((JsonObject)State[path[13..]].DeepClone());
         }
         public void Dispose(){}
@@ -100,6 +101,13 @@ internal static class SelfTests
         using(var client=new RouterClient(profile,wire))
         {
             var result=await client.ApplyAsync(change);Assert(wire.Writes==1 && result.StartsWith("Saved and verified",StringComparison.Ordinal),"Save/read-back failed.");
+            // An expired session is re-established once for reads; a second expiry is reported, never looped.
+            var page=new Page("t","t","",["DEVICEOPERMODE_ALL","NETWORKDNS_ALL"]);
+            wire.TimeoutsRemaining=1;var renewed=await client.ReadPageAsync(page);
+            Assert(renewed.Reads.Count==2 && renewed.Reads.All(r=>r.Readable),"Expired session was not re-established for reads.");
+            wire.TimeoutsRemaining=5;var expired=await client.ReadPageAsync(page);
+            Assert(expired.Reads.Count==1 && expired.Reads[0].Status=="SessionTimeout" && wire.TimeoutsRemaining==3,"Repeated session expiry was retried more than once.");
+            wire.TimeoutsRemaining=0;Assert(wire.Writes==1,"A read retry sent a write.");
         }
         var bridgeWire=new FakeWire();
         using(var client=new RouterClient(profile,bridgeWire))

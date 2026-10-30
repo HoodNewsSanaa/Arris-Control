@@ -14,5 +14,5 @@
   <queries><package android:name="com.arris.sbc" /></queries>
   <application android:allowBackup="false" android:fullBackupContent="false"
     android:label="Arris Control" android:icon="@drawable/ic_router" android:theme="@style/AppTheme"
-    android:usesCleartextTraffic="false" android:supportsRtl="true" />
+    android:usesCleartextTraffic="false" android:supportsRtl="true" android:enableOnBackInvokedCallback="true" />
 </manifest>
