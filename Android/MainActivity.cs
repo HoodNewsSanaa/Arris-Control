@@ -615,6 +615,10 @@ public sealed class MainActivity : Activity
     {
         Shell("Guided setup"); backAction = BackToStart;
         var target = string.Join("  ·  ", new[] { model, serial, mac }.Where(v => !string.IsNullOrEmpty(v)));
+        BleLog.Add($"guided setup opened for {(target.Length > 0 ? target : "a unit")}");
+        var logCard = Card("Activity log", "Records each Bluetooth step with byte lengths and status codes. Secret values are noted by length only. Export it to share here.", chipText: "Diagnostic", chipColor: Palette.Accent);
+        Action(logCard, "Export activity log", () => { ShowReport("Bluetooth activity log", "Every Bluetooth step this session, newest last. Secret values are never included.", BleLog.Export()); return Task.CompletedTask; }, Tone.Primary);
+        Action(logCard, "Clear log", () => { BleLog.Clear(); status.Text = "Activity log cleared."; return Task.CompletedTask; });
         var warn = Card("Experimental — read first", target.Length > 0 ? "Target: " + target : null, chipText: "Caution", chipColor: Palette.Warning);
         warn.AddView(Label("The exact Bluetooth write format is reconstructed from the official app and has not been confirmed on hardware. A wrong write can leave a factory-reset router recoverable only with the SURFboard Central app. Nothing is sent until you confirm each step below.", 14, color: Palette.Muted));
 
@@ -662,8 +666,10 @@ public sealed class MainActivity : Activity
                 Lock("Writes locked after a failure.");
                 throw new RouterException($"Writing {label} was reported as failed. {ex.Message} Setup state: {(state.Length > 0 ? state : "unknown")}.\n\nThe router may still have partly applied it. Stop here: don't send more writes. If the unit stops responding, factory-reset it and set it up with SURFboard Central.");
             }
-            status.Text = label + " written.";
-            await Message("Written", label + " was written to the router.");
+            var after = await BleReadText(MaxBle.ObaState);
+            BleLog.Add($"setup state after {label}: {(after.Length > 0 ? after : "unknown")}");
+            status.Text = label + " written. Setup state: " + (after.Length > 0 ? after : "unknown") + ".";
+            await Message("Written", $"{label} was written.\n\nSetup state now: {(after.Length > 0 ? after : "unknown")}.\n\nRemember a written value is not proof the router applied it. Export the log to review the full sequence.");
         }
 
         Action(writes, "1 · Write network name (SSID)", () => EncryptedWrite("the SSID", MaxBle.P11Ssid, () => ssid.Text ?? "", true), Tone.Secondary);
