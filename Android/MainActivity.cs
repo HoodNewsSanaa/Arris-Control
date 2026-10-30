@@ -679,7 +679,9 @@ public sealed class MainActivity : Activity
     {
         status.Text = "Reading " + currentPage.Name + "…";
         var snapshot = await Task.Run(() => client!.ReadPageAsync(currentPage, lifetime.Token), lifetime.Token);
+        if (currentPage.Id == "diagnostics") { dirty = false; ShowDiagnostics(snapshot); return; }
         dirty = false; content.AddView(Label(currentPage.Description.Replace("this PC", "this phone")));
+        if (currentPage.Id == "tools") ShowTools(snapshot);
         if ((currentPage.Id is "overview" or "internet") && snapshot.Data.TryGetValue("DEVICEOPERMODE_ALL", out var modes) && modes["DEVICEOPERMODE"] is JsonObject mode)
         {
             var value = Catalog.Text(mode["MODE"]);
@@ -705,6 +707,73 @@ public sealed class MainActivity : Activity
         if (failed.Length > 0) content.AddView(Label("Unavailable reads\n" + string.Join("\n", failed), 12));
         status.Text = $"{snapshot.Reads.Count(r => r.Readable)}/{snapshot.Reads.Count} queries read · {snapshot.Time:HH:mm:ss}.";
     }
+    void ShowDiagnostics(Snapshot snapshot)
+    {
+        var version = PackageManager!.GetPackageInfo(PackageName!, 0)?.VersionName ?? "?";
+        var report = Diagnostics.Report(snapshot, "Android", version);
+        var ok = snapshot.Reads.Count(r => r.Readable);
+        var card = Card("Diagnostics report", "Read-only — nothing on the router was changed. Values that could identify you (names, addresses, passwords) are replaced. Copy or share it to help add support for more settings.",
+            chipText: $"{ok}/{snapshot.Reads.Count} answered", chipColor: ok > 0 ? Palette.Success : Palette.Warning);
+        Action(card, "Copy report", () =>
+        {
+            var clipboard = (ClipboardManager)GetSystemService(ClipboardService)!;
+            clipboard.PrimaryClip = ClipData.NewPlainText("Arris Control diagnostics", report);
+            status.Text = "Diagnostics report copied. Paste it wherever you need it.";
+            return Task.CompletedTask;
+        }, Tone.Primary);
+        Action(card, "Share report", () =>
+        {
+            var send = new Intent(Intent.ActionSend); send.SetType("text/plain"); send.PutExtra(Intent.ExtraText, report);
+            StartActivity(Intent.CreateChooser(send, "Share diagnostics report")); return Task.CompletedTask;
+        });
+        var text = Label(report, 11, color: Palette.Text);
+        text.SetTypeface(Android.Graphics.Typeface.Monospace, Android.Graphics.TypefaceStyle.Normal); text.SetTextIsSelectable(true);
+        card.AddView(text);
+        status.Text = $"Diagnostics finished · {ok}/{snapshot.Reads.Count} endpoints answered · {snapshot.Time:HH:mm:ss}.";
+    }
+
+    void ShowTools(Snapshot snapshot)
+    {
+        var speed = Card("Router speed test", "Measures your Internet speed from the router itself, so Wi-Fi doesn't affect the result. Takes about a minute.");
+        if (snapshot.Data.TryGetValue("SPEEDTESTWAN_ALL", out var last))
+            foreach (var row in Catalog.Flatten(last, "SPEEDTESTWAN_ALL").Where(r => r.Value != "[hidden]").Take(8))
+                speed.AddView(Label(row.Field.Split('.').Last() + ":  " + row.Value, 13, color: Palette.Muted));
+        Action(speed, "Run speed test", RunSpeedTest, Tone.Primary);
+        var renew = Card("Renew Internet connection", "Asks your ISP for a fresh address. Useful when the connection is stuck; Internet drops for a few seconds.");
+        Action(renew, "Renew IPv4 connection", async () =>
+        {
+            if (!await Confirm("Renew the Internet connection?", "The router asks your ISP for a new IPv4 address. Internet access drops for a few seconds.", "Renew")) { status.Text = "Cancelled; nothing was sent."; return; }
+            status.Text = "Renewing the Internet connection…";
+            await Task.Run(() => client!.RunActionAsync("WANIPCONFIG", new() { ["IPSTACK"] = "IPV4", ["RENEW"] = "true" }, lifetime.Token), lifetime.Token);
+            status.Text = "Renew request sent. Give it a few seconds, then refresh Overview to see the Internet status.";
+            await Message("Renew sent", status.Text);
+        }, Tone.Danger);
+    }
+
+    async Task RunSpeedTest()
+    {
+        if (!await Confirm("Run a speed test?", "The router runs an Internet speed test. It uses your connection for about a minute.", "Start")) { status.Text = "Cancelled; nothing was sent."; return; }
+        status.Text = "Starting the speed test on the router…";
+        await Task.Run(() => client!.RunActionAsync("SPEEDTESTWAN", new() { ["DIAGSTATE"] = "Requested" }, lifetime.Token), lifetime.Token);
+        JsonObject? result = null; var state = "";
+        for (var i = 0; i < 40; i++)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(3), lifetime.Token);
+            var data = await Task.Run(() => client!.ReadAsync("SPEEDTESTWAN_ALL", lifetime.Token), lifetime.Token);
+            var node = data["SPEEDTESTWAN"];
+            var test = node as JsonObject ?? (node as JsonArray)?.OfType<JsonObject>().FirstOrDefault();
+            state = Catalog.Text(test?["DIAGSTATE"]);
+            status.Text = $"Speed test running… ({state}, {3 * (i + 1)} s)";
+            result = data;
+            if (state.Length > 0 && !Regex.IsMatch(state, "Requested|Progress|Running|Pending", RegexOptions.IgnoreCase)) break;
+        }
+        var summary = result is null ? "No result was returned." :
+            string.Join("\n", Catalog.Flatten(result, "SPEEDTESTWAN_ALL").Where(r => r.Value != "[hidden]").Select(r => r.Field.Split('.').Last() + ": " + r.Value).Take(12));
+        status.Text = "Speed test " + (state.Length > 0 ? state.ToLowerInvariant() : "finished") + ".";
+        await Message("Speed test result", summary);
+        ShowRouter(); await Read();
+    }
+
     void Editor(SettingSection section, bool adding = false)
     {
         var editor = Card(section.Title);
@@ -719,9 +788,9 @@ public sealed class MainActivity : Activity
                 toggle.SetPadding(0, Dp(10), 0, Dp(10)); toggle.CheckedChange += (_, _) => dirty = true;
                 toggle.SetMinHeight(Dp(60)); toggle.SetTextColor(Palette.Text); editor.AddView(toggle); getters[field.Key] = () => toggle.Checked ? "1" : "0";
             }
-            else if (field.Kind == "choice")
+            else if (field.Kind is "choice" or "channel")
             {
-                var choices = field.Choices!; var selected = old;
+                var choices = field.Kind == "channel" ? Settings.ChannelChoices(section.Container, old) : field.Choices!; var selected = old;
                 string Caption() => field.Label + "\n" + (choices.FirstOrDefault(c => c.Value == selected)?.Label ?? "Choose a value");
                 Button? choice = null;
                 choice = Action(editor, Caption(), async () =>

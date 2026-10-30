@@ -9,7 +9,7 @@ namespace ArrisControl;
 internal record Choice(string Value,string Label){public override string ToString()=>Label;}
 internal record SettingField(string Key,string Label,string Kind="text",Choice[]? Choices=null,string Hint="");
 internal record SettingDefinition(string Key,string Container,string Title,SettingField[] Fields,
-    bool Collection=false,string Impact="",string[]? Metadata=null);
+    bool Collection=false,string Impact="",string[]? Metadata=null,bool ActionOnly=false);
 internal record SettingSection(SettingDefinition Definition,string Container,int Index,string Identity,JsonObject Baseline,string Title);
 internal record PendingChange(SettingDefinition Definition,string Container,int Index,string Identity,
     JsonObject Before,JsonObject Expected,string Body,string Preview,string Operation);
@@ -46,8 +46,55 @@ internal static class Settings
         new("PARENTAL_CONTROL_ALL","PARENTAL_CONTROL","Parental controls",[Toggle("ENABLE","Enable parental controls")]),
         new("QoS_ALL","QoS","Quality of service",[Toggle("ENABLE","Enable quality of service")]),
         Wifi("WIFI_24G","Main Wi-Fi · 2.4 GHz",false),Wifi("WIFI_5G","Main Wi-Fi · 5 GHz",false),
-        Wifi("WIFI_GUEST_24G","Guest Wi-Fi · 2.4 GHz",true),Wifi("WIFI_GUEST_5G","Guest Wi-Fi · 5 GHz",true)
+        Wifi("WIFI_GUEST_24G","Guest Wi-Fi · 2.4 GHz",true),Wifi("WIFI_GUEST_5G","Guest Wi-Fi · 5 GHz",true),
+        // Field names below come from SURFboard Central's mAX request/response models.
+        // Each editor appears only when the router returns that container.
+        new("WIFI_FH_BANDSTEERING_ALL","WIFI_FH_BANDSTEERING","Band steering",[Toggle("ENABLE","One network name for 2.4 and 5 GHz")],false,
+            "Wireless devices may briefly disconnect and rejoin."),
+        new("WIFI_FH_DFS_ALL","WIFI_FH_DFS","DFS channels",[Toggle("ENABLE","Allow DFS (radar-shared) 5 GHz channels")],false,
+            "DFS channels can be less crowded, but the router must leave them briefly when radar is detected."),
+        new("WIFI_FAST_LANE_ALL","WIFI_FAST_LANE","Wi-Fi fast lane",[Toggle("ENABLE","Prioritize Wi-Fi traffic for fast-lane devices")]),
+        new("LEDRING_ALL","LEDRING","Light ring",[Toggle("ENABLE","Light ring on"),Text("BRIGHTNESS","Brightness (0–100)","percent")],false,"",["CONTAINER"]),
+        new("TIME_ALL","TIMEZONE","Time zone",[Toggle("AUTOENABLE","Set time zone automatically"),Text("LOCALTIMEZONE","Time zone","timezone"),
+            Toggle("DSTENABLE","Daylight saving time")],false,"",["ENABLE"]),
+        new("WANSTATICIPV4_ALL","WANSTATICIPV4","Internet (WAN) IPv4",[
+            new("DYNAMICV4","Address mode","choice",[new("1","Automatic (DHCP)"),new("0","Static")]),
+            Text("WANIPV4ADDRESS","Static IPv4 address","ipv4"),Text("SUBNETMASK","Subnet mask","netmask"),
+            Text("GATEWAYIPV4","Gateway","ipv4"),Text("DNSIPV4SERVERS","DNS servers","dns4")],false,
+            "A wrong static setting cuts off Internet access. This phone can still reach the router over its Wi-Fi to change it back."),
+        new("PC_URLS_BLOCKED_ALL","PC_URLS_BLOCKED","Blocked website",[Toggle("ENABLE","Blocking enabled"),Text("URL","Website","host")],true,
+            "Blocking applies to devices covered by parental controls.",["IDX","PORTNUMBER"]),
+        // One-shot actions: allowed as writes, never shown as editable forms.
+        new("","WANIPCONFIG","Renew Internet connection",[new("IPSTACK","IP version","choice",[new("IPV4","IPv4"),new("IPV6","IPv6")]),
+            new("RENEW","Renew","choice",[new("true","Renew")])],false,"The Internet connection drops for a few seconds while the router asks your ISP for a new address.",null,true),
+        new("SPEEDTESTWAN_ALL","SPEEDTESTWAN","Router speed test",[new("DIAGSTATE","Test","choice",[new("Requested","Start")])],false,
+            "Runs on the router and uses your Internet connection for about a minute.",null,true)
     ];
+    public static readonly string[] Dfs5g=["52","56","60","64","100","104","108","112","116","120","124","128","132","136","140","144"];
+    /// <summary>Common channels for a band, with the router's current value kept if it isn't listed.</summary>
+    public static Choice[] ChannelChoices(string container,string current)
+    {
+        var is24=container.Contains("24G",StringComparison.Ordinal);
+        var list=is24 ? Enumerable.Range(1,11).Select(c=>c.ToString()).ToList()
+            : new[]{"36","40","44","48"}.Concat(Dfs5g).Concat(new[]{"149","153","157","161","165"}).ToList();
+        var choices=list.Select(c=>new Choice(c,Dfs5g.Contains(c)?c+"  (DFS)":c)).ToList();
+        if(current.Length>0 && !list.Contains(current))choices.Insert(0,new Choice(current,current+"  (current)"));
+        return choices.ToArray();
+    }
+    /// <summary>Builds a one-shot action request (renew WAN, start speed test) from the action allowlist.</summary>
+    public static string Action(string container,Dictionary<string,string> values)
+    {
+        var def=Definitions.FirstOrDefault(d=>d.Container==container && d.ActionOnly)??throw new RouterException("This action is not available in this build.");
+        var payload=new JsonObject();
+        foreach(var field in def.Fields)
+        {
+            if(!values.TryGetValue(field.Key,out var value))throw new RouterException("The action is incomplete.");
+            Validate(field,value);payload[field.Key]=value;
+        }
+        if(values.Keys.Any(k=>def.Fields.All(f=>f.Key!=k)))throw new RouterException("Unexpected action field.");
+        var body=new JsonObject{["REQUEST"]=new JsonObject{["OPERTYPE"]="MODIFY",[container]=payload}}.ToJsonString();
+        ValidateEnvelope(body);return body;
+    }
     static SettingDefinition Wifi(string container,string title,bool guest)=>new(container+"_ALL",container,title,
         guest ? [Toggle("ENABLE","Guest Wi-Fi enabled"),Text("SSIDNAME","Network name","ssid"),Text("PASSPHRASE","New Wi-Fi password","password","Leave blank to keep the current password.")]
         : [Text("SSIDNAME","Network name","ssid"),Text("PASSPHRASE","New Wi-Fi password","password","Leave blank to keep the current password."),
@@ -65,7 +112,7 @@ internal static class Settings
     public static List<SettingSection> Sections(Snapshot snapshot)
     {
         var result=new List<SettingSection>();
-        foreach(var def in Definitions.Where(d=>snapshot.Data.ContainsKey(d.Key)))
+        foreach(var def in Definitions.Where(d=>!d.ActionOnly && snapshot.Data.ContainsKey(d.Key)))
         {
             var node=snapshot.Data[def.Key][def.Container];
             if(node is JsonObject o)result.Add(new(def,def.Container,0,Catalog.Text(o["IDX"]),Filter(def,o),def.Title));
@@ -111,11 +158,21 @@ internal static class Settings
         if(field.Kind=="password" && !(value.Length is >=8 and <=63 || Regex.IsMatch(value,"^[A-Fa-f0-9]{64}$")))throw new RouterException("Use an 8–63 character Wi-Fi password or a 64-digit hexadecimal key.");
         if(field.Kind is "ipv4" or "ipv6")CheckIp(value,field.Kind=="ipv4"?AddressFamily.InterNetwork:AddressFamily.InterNetworkV6,field.Label);
         if(field.Kind=="mac" && !Regex.IsMatch(value,"^(?:[A-Fa-f0-9]{2}:){5}[A-Fa-f0-9]{2}$"))throw new RouterException("Use a MAC address such as 00:11:22:33:44:55.");
+        if(field.Kind=="percent" && !(int.TryParse(value,out var percent) && percent is >=0 and <=100))throw new RouterException(field.Label+" must be between 0 and 100.");
+        if(field.Kind=="netmask" && !IsNetmask(value))throw new RouterException("Enter a subnet mask such as 255.255.255.0.");
+        if(field.Kind=="host" && !Regex.IsMatch(value,@"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$"))throw new RouterException("Enter a website name such as example.com (without http://).");
+        if(field.Kind=="timezone" && !Regex.IsMatch(value,@"^[A-Za-z0-9_+\-/:., ]{1,64}$"))throw new RouterException("Enter a time zone such as America/New_York.");
         if(field.Kind is "port" or "lease" or "positive" or "channel")
         {
             var maximum=field.Kind=="port" ? 65535L:field.Kind=="channel" ? 233L:int.MaxValue;
             if(!long.TryParse(value,out var number) || number<1 || number>maximum)throw new RouterException(field.Label+" must be between 1 and "+maximum+".");
         }
+    }
+    static bool IsNetmask(string value)
+    {
+        if(!IPAddress.TryParse(value,out var ip) || ip.AddressFamily!=AddressFamily.InterNetwork)return false;
+        var b=ip.GetAddressBytes();var bits=((uint)b[0]<<24)|((uint)b[1]<<16)|((uint)b[2]<<8)|b[3];
+        var inverse=~bits;return bits!=0 && (inverse&(inverse+1))==0;
     }
     static void CheckIp(string value,AddressFamily family,string label)
     {
@@ -176,6 +233,20 @@ internal static class Settings
             if(operation=="ADD"){payload["ALLINTERFACES"]="1";payload["ENABLE"]="1";payload["APP"]=payload["DESCRIPTION"]?.DeepClone()??JsonValue.Create("");}
         }
         if(container=="STATICIP" && operation=="ADD")payload["ENABLE"]="1";
+        if(container=="PC_URLS_BLOCKED" && operation=="ADD")payload["ENABLE"]="1";
+        if(container=="WANSTATICIPV4")
+        {
+            var wanMode=Catalog.Text(payload["DYNAMICV4"]);
+            if(wanMode is not ("0" or "1"))throw new RouterException("The router did not return a recognized WAN address mode. Refresh first.");
+            if(wanMode=="0")
+            {
+                foreach(var key in new[]{"WANIPV4ADDRESS","GATEWAYIPV4"})CheckIp(Catalog.Text(payload[key]),AddressFamily.InterNetwork,key=="GATEWAYIPV4"?"gateway":"static IPv4 address");
+                if(!IsNetmask(Catalog.Text(payload["SUBNETMASK"])))throw new RouterException("Enter a subnet mask such as 255.255.255.0.");
+                var dns=Catalog.Text(payload["DNSIPV4SERVERS"]).Split(',').Select(v=>v.Trim()).Where(v=>v.Length>0).ToArray();
+                if(dns.Length is <1 or >2)throw new RouterException("Enter one or two DNS servers for a static WAN address.");
+                foreach(var entry in dns)CheckIp(entry,AddressFamily.InterNetwork,"DNS address");
+            }
+        }
         if(container=="DEVICEOPERMODE" && Catalog.Text(payload["MODE"]) is not ("DUAL" or "IPV4ONLY" or "BRIDGE"))throw new RouterException("Unrecognized routing mode.");
         if(container=="DEVICEOPERMODE" && Catalog.Text(payload["MODE"])=="BRIDGE")changes.Add("WARNING: Enabling bypass may disconnect this app and make the router unreachable. Turning bypass off requires management access. Automatic reconnection is not guaranteed. Turning bypass off after reconnecting has not been verified; a physical reset may be needed.");
         if(operation=="DELETE")
@@ -186,7 +257,10 @@ internal static class Settings
         if(changes.Count==0)throw new RouterException("No settings have changed.");
         if(operation=="ADD")
         {
-            var required=container=="STATICIP"?new[]{"MACADDRESS","IPV4ADDRESS"}:new[]{"INTERNALCLIENT","PROTOCOL","EXTERNALPORT","EXTERNALPORTENDRANGE","INTERNALPORT","INTERNALPORTENDRANGE"};
+            var required=container switch{
+                "STATICIP"=>new[]{"MACADDRESS","IPV4ADDRESS"},
+                "PC_URLS_BLOCKED"=>new[]{"URL"},
+                _=>new[]{"INTERNALCLIENT","PROTOCOL","EXTERNALPORT","EXTERNALPORTENDRANGE","INTERNALPORT","INTERNALPORTENDRANGE"}};
             foreach(var key in required)if(Catalog.Text(payload[key]).Length==0)throw new RouterException("Complete all required fields before adding a rule.");
         }
         var body=new JsonObject{["REQUEST"]=new JsonObject{["OPERTYPE"]=operation,[container]=payload}}.ToJsonString();
