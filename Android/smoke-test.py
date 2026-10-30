@@ -6,6 +6,12 @@ import time
 from pathlib import Path
 
 
+def annotate(message):
+    """Surface a failure as a GitHub annotation, readable from the API without downloading logs."""
+    text = message.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
+    print('::error title=Android smoke test::' + text[:4000], flush=True)
+
+
 def adb(*args):
     return subprocess.check_output(['adb', *args], text=True, stderr=subprocess.STDOUT)
 
@@ -31,7 +37,9 @@ for _ in range(45):
     adb('shell', 'uiautomator', 'dump', '/sdcard/arris-ui.xml')
     ui = adb('shell', 'cat', '/sdcard/arris-ui.xml')
     if 'PASS: Android API scan, HTTPS login and reconnect.' in ui:
-        if fixture.logins != 3 or fixture.anonymous_reads < 1 or fixture.protected_reads < 9:
+        # Sessions 1 and 2 read identity, mode and one page (3 each); the legacy upgrade reads identity and mode (2).
+        if fixture.logins != 3 or fixture.anonymous_reads < 1 or fixture.protected_reads < 8:
+            annotate(f'Fixture counters: logins={fixture.logins} (expected 3), anonymous_reads={fixture.anonymous_reads}, protected_reads={fixture.protected_reads} (expected >= 8)')
             raise SystemExit('Fixture did not observe the expected anonymous scan and exactly three authenticated sessions (none from the impostor check)')
         print('PASS: APK UI, Android Keystore, anonymous API scan, actual HTTPS login/cookies, saved address update, reconnect, certificate-pin impostor refusal and legacy pin upgrade.')
         adb('root')
@@ -43,8 +51,11 @@ for _ in range(45):
     if app_crashed or 'Operation result' in ui:
         Path('artifacts/android-smoke.log').write_text(logs)
         print('Fixture counters:', fixture.logins, fixture.anonymous_reads, fixture.protected_reads)
-        print(adb('logcat', '-d', '-s', 'ArrisControlSelfTest:E', 'AndroidRuntime:E', 'DOTNET:I'))
+        errors = adb('logcat', '-d', '-s', 'ArrisControlSelfTest:E', 'AndroidRuntime:E')
+        print(errors)
+        annotate(f'App self-test failed. Fixture counters: logins={fixture.logins}, anonymous_reads={fixture.anonymous_reads}, protected_reads={fixture.protected_reads}\n' + errors[-3500:])
         raise SystemExit('Android offline smoke test failed; see android-smoke.log')
 else:
     Path('artifacts/android-smoke.log').write_text(adb('logcat', '-d'))
+    annotate('Android checks did not finish within 90 seconds.\n' + adb('logcat', '-d', '-s', 'ArrisControlSelfTest:E', 'AndroidRuntime:E', 'DOTNET:I')[-3500:])
     raise SystemExit('Android offline checks did not finish within 90 seconds')
