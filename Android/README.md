@@ -2,6 +2,13 @@
 
 Install `Arris-Control-android.apk` from an **Android preview** on the repository's Releases page. Allow installation from your browser/file manager when Android prompts. Requires Android 8.0+ on ARM64; the APK also contains x86_64 for emulators. No root or separate .NET installation is needed.
 
+## App updates
+
+Use **Updates** at the top of the app. Automatic checks run when the app opens;
+downloads and Android installation approval stay under your control. Public
+releases use a permanent signing key and compatible updates preserve saved logins. Older
+disposable-key previews need one final reinstall. See [updater details](UPDATES.md).
+
 ## Touchscreen interface
 
 The interface uses a black background, white text, large outlined controls, 60 dp minimum buttons and 64 dp option rows. Connection, discovery and saved routers have separate cards. Account setup and returned-field details expand when needed; settings keep Refresh and Connections actions within reach at the bottom. No teal or blue accents are used.
@@ -24,6 +31,39 @@ writing, stops after any uncertain result, and provides local HTTPS verification
 without an ARRIS account or protocol reference. This still needs a spare-unit
 hardware test; firmware may require cloud registration. See
 [the exact scope, procedure and evidence](../docs/offline-first-setup.md).
+
+### Record a stalled onboarding state
+
+On **Router over Bluetooth**, choose **Record state for 3 minutes (read-only)**.
+The app makes a baseline of the known identity/firmware/status fields, then
+sequentially samples role, onboarding state, WAN status, download progress and
+upgrade status with a five-second pause between completed samples. It preserves
+UTC timestamps, elapsed time, exact escaped UTF-8/hex, service properties and
+explicit GATT rejection codes. Serial/MAC bytes are withheld and replaced by
+consistent tokens within that capture; unknown/secret fields are never read.
+
+**Stop and save capture** stays available during reads. Leaving the app also
+stops recording and closes the connection. A partial report is saved privately
+on the phone as each sample completes; **Open saved Bluetooth captures** is
+available under More options and Bluetooth inspection after relaunch. Each recording
+has its own dated file, so later attempts retain the earlier baseline. Copy/share
+is user-started. This is an app read-only capture, not an HCI log of the official
+app or a capture/decryption of router WAN traffic. UPGRADING alone does not prove
+that firmware is downloading or that a cloud service is required.
+
+### Individual Bluetooth commands
+
+The inspection screen also offers **Set role…** (MAINAP or EXTENDER) and
+**Send SETOBCOMPLETE…**. These experimental commands are separate from guided
+provisioning and can be attempted with missing bootstrap identity or a reported
+UPGRADING state. Each needs explicit confirmation showing the selected unit and
+last reported state. It reconnects, checks the onboarding interface and all
+previously known application/role/serial/WAN-MAC values, sends one acknowledged
+write, attempts read-back, then disconnects. An incomplete write is never retried;
+inspect the unit again before another attempt. If an update is really running,
+changing onboarding may disrupt it. Use a spare unit and preserve the baseline.
+An acknowledgement is not proof of completed setup. EXTENDER alone does not pair
+a mesh; neither command installs firmware or contacts ARRIS services.
 
 ### Personal builds with the settings bundled
 
@@ -58,7 +98,7 @@ This does not implement factory onboarding, account recovery, MFA challenges, fi
 
 ## Build and verification
 
-GitHub Actions builds on `main`, `codex/android`, relevant PRs and manual dispatch. Push builds publish a separate Android prerelease without replacing the latest stable Windows release. The workflow runs shared offline regression tests, publishes the APK, launches it on an Android 15 x86_64 emulator, and runs those fixtures plus Android Keystore encryption/tamper tests inside the actual app. It also runs an emulator-host HTTPS router fixture to verify anonymous API discovery, real login/session cookies, verified address changes and reconnect from an encrypted saved profile. It uploads APK/checksum/UI-preview artifacts and publishes the tested APK on push.
+GitHub Actions builds on `main`, `codex/android`, relevant PRs and manual dispatch. Permanently signed push builds publish a separate Android prerelease without replacing the latest stable Windows release. The workflow runs shared offline regression tests, publishes the APK, launches it on an Android 15 x86_64 emulator, and runs those fixtures plus Android Keystore encryption/tamper tests inside the actual app. It also runs an emulator-host HTTPS router fixture to verify anonymous API discovery, real login/session cookies, verified address changes and reconnect from an encrypted saved profile. It uploads APK/checksum/UI-preview artifacts. Public updater releases are published only when permanent signing is configured.
 
 Locally with .NET 10, JDK 21 and the Android SDK:
 
@@ -68,6 +108,6 @@ dotnet run --project Tests/Arris-Control.Tests.csproj
 dotnet publish Android/Arris-Control.Android.csproj -c Release -p:AndroidPackageFormats=apk -o artifacts
 ```
 
-The included CI APK uses a development signing key generated by that build runner. Each build can have a different signature, requiring uninstall/reacquisition to replace it. For stable personal updates, supply your own persistent signing key through Android's normal `AndroidKeyStore`, `AndroidSigningKeyStore`, `AndroidSigningKeyAlias`, `AndroidSigningKeyPass` and `AndroidSigningStorePass` build properties. Never commit keys or passwords.
+Public updater releases require the permanent signing key stored in GitHub Actions secrets. Unsigned-setup and pull-request builds use disposable keys for testing and are not published to the updater feed. Switching from an older disposable-key preview requires one final reinstall. See [permanent signing and update verification](UPDATES.md).
 
 Shared tests use fictional credentials only. The Keystore smoke test also uses fictional data and performs no router/cloud requests. Passing CI establishes installation/startup/protocol behavior, not physical-router compatibility; live changes still need user testing.

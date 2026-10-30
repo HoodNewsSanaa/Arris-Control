@@ -14,7 +14,7 @@ namespace ArrisControl;
 
 [Activity(Label = "Arris Control", MainLauncher = true, Exported = true,
     ConfigurationChanges = ConfigChanges.Orientation | ConfigChanges.ScreenSize)]
-public sealed class MainActivity : Activity
+public sealed partial class MainActivity : Activity
 {
     LinearLayout root = null!, content = null!;
     TextView status = null!, networkStatus = null!;
@@ -37,6 +37,10 @@ public sealed class MainActivity : Activity
     // Where the system Back gesture/button goes from the current screen; null means leave the app.
     Func<Task>? backAction;
     bool addressEdited;
+    AndroidUpdate? availableUpdate;
+    Button? updateShortcut;
+    CancellationTokenSource? updateDownload;
+    bool downloadedUpdate;
 
     protected override void OnCreate(Bundle? state)
     {
@@ -46,12 +50,27 @@ public sealed class MainActivity : Activity
         if (Build.VERSION.SdkInt >= BuildVersionCodes.Tiramisu)
             OnBackInvokedDispatcher.RegisterOnBackInvokedCallback(0, new BackCallback(this));
         ShowConnect();
-        if (Intent?.GetBooleanExtra("offlineSelfTest", false) != true) TryAutoConnect();
+        var updateTest = Intent?.GetBooleanExtra("updaterSelfTest", false) == true || Intent?.GetBooleanExtra("updateRetentionSelfTest", false) == true;
+        if (Intent?.GetBooleanExtra("offlineSelfTest", false) != true && !updateTest) _ = CheckUpdatesQuietly();
+        if (Intent?.GetBooleanExtra("offlineSelfTest", false) != true && !updateTest) TryAutoConnect();
+        if (updateTest) _ = Run(() =>
+        {
+            try
+            {
+                if (Intent?.GetBooleanExtra("updaterSelfTest", false) == true) AndroidUpdateSelfTests.VerifyCandidate(this);
+                else AndroidUpdateSelfTests.VerifyRetained(this);
+                status.Text = "PASS: Android update verification."; return Task.CompletedTask;
+            }
+            catch (Exception ex) { Android.Util.Log.Error("ArrisControlSelfTest", ex.ToString()); throw; }
+        });
         if (Intent?.GetBooleanExtra("offlineSelfTest", false) == true)
             _ = Run(async () =>
             {
                 await Task.Run(() => SelfTests.RunAsync(), lifetime.Token);
                 await BleManager.RunCallbackSelfTestsAsync(lifetime.Token);
+                await BleCaptureSelfTests.RunAsync();
+                await BleManualCommandSelfTests.RunAsync();
+                await UpdateProtocolSelfTests.RunAsync();
                 var fixture = CredentialProtection.Protect([1, 2, 3], [4]);
                 fixture[^1] ^= 1;
                 try { CredentialProtection.Unprotect(fixture, [4]); throw new InvalidOperationException("Tampered credential accepted."); }
@@ -110,23 +129,24 @@ public sealed class MainActivity : Activity
     }
     protected override void OnDestroy()
     {
-        lifetime.Cancel(); client?.Dispose(); ble?.Dispose(); AndroidNetwork.UseInternet();
+        bleCaptureStop?.Cancel();
+        updateDownload?.Cancel(); lifetime.Cancel(); client?.Dispose(); ble?.Dispose(); AndroidNetwork.UseInternet();
         lifetime.Dispose(); base.OnDestroy();
     }
     int Dp(int n) => (int)(n * Resources!.DisplayMetrics!.Density);
-    // A calm dark palette with one azure accent and semantic status colors.
+    // Monochrome touch UI: black surfaces and white text, with neutral borders.
     static class Palette
     {
-        public static readonly Color Bg = Color.Rgb(0x0E, 0x10, 0x15);
-        public static readonly Color Surface = Color.Rgb(0x18, 0x1B, 0x22);
-        public static readonly Color SurfaceStroke = Color.Rgb(0x2C, 0x31, 0x3B);
-        public static readonly Color Text = Color.Rgb(0xF4, 0xF6, 0xF8);
-        public static readonly Color Muted = Color.Rgb(0x96, 0x9D, 0xAA);
-        public static readonly Color Accent = Color.Rgb(0x4C, 0x8D, 0xFF);
-        public static readonly Color OnAccent = Color.Rgb(0x08, 0x0B, 0x12);
-        public static readonly Color Success = Color.Rgb(0x37, 0xC9, 0x7F);
-        public static readonly Color Warning = Color.Rgb(0xE6, 0xA5, 0x4B);
-        public static readonly Color Danger = Color.Rgb(0xE8, 0x61, 0x5B);
+        public static readonly Color Bg = Color.Rgb(0x00, 0x00, 0x00);
+        public static readonly Color Surface = Color.Rgb(0x16, 0x16, 0x16);
+        public static readonly Color SurfaceStroke = Color.Rgb(0x3A, 0x3A, 0x3A);
+        public static readonly Color Text = Color.Rgb(0xFF, 0xFF, 0xFF);
+        public static readonly Color Muted = Color.Rgb(0xB0, 0xB0, 0xB0);
+        public static readonly Color Accent = Color.Rgb(0xFF, 0xFF, 0xFF);
+        public static readonly Color OnAccent = Color.Rgb(0x00, 0x00, 0x00);
+        public static readonly Color Success = Color.Rgb(0xFF, 0xFF, 0xFF);
+        public static readonly Color Warning = Color.Rgb(0xFF, 0xFF, 0xFF);
+        public static readonly Color Danger = Color.Rgb(0xFF, 0xFF, 0xFF);
     }
     enum Tone { Secondary, Primary, Danger }
     TextView Label(string text, int size = 15, bool heading = false, Color? color = null)
@@ -182,6 +202,12 @@ public sealed class MainActivity : Activity
         var brandRow = new LinearLayout(this) { Orientation = Orientation.Horizontal }; brandRow.SetGravity(GravityFlags.CenterVertical);
         var dot = new TextView(this) { Text = "●", TextSize = 12 }; dot.SetTextColor(Palette.Accent); dot.SetPadding(0, 0, Dp(8), 0); brandRow.AddView(dot);
         var brand = Label("ARRIS CONTROL", 11, color: Palette.Muted); brand.LetterSpacing = 0.22f; brandRow.AddView(brand);
+        brand.LayoutParameters = new LinearLayout.LayoutParams(0, -2, 1);
+        updateShortcut = Action(brandRow, availableUpdate is null ? "Updates" : "Update available", async () =>
+        {
+            if (await Discard()) { dirty = false; ShowUpdates(); }
+        });
+        updateShortcut.LayoutParameters = new LinearLayout.LayoutParams(-2, Dp(58)) { LeftMargin = Dp(10) };
         root.AddView(brandRow);
         var heading = Label(subtitle, 30, true); heading.SetPadding(0, Dp(2), 0, Dp(6)); root.AddView(heading);
         networkStatus = Label(AndroidNetwork.Status(), 12, color: Palette.Muted); root.AddView(networkStatus);
@@ -218,7 +244,7 @@ public sealed class MainActivity : Activity
         var field = new EditText(this) { Text = text, TextSize = 17,
             InputType = secret ? InputTypes.ClassText | InputTypes.TextVariationPassword : InputTypes.ClassText | InputTypes.TextFlagNoSuggestions };
         field.SetSingleLine(true); field.SetTextColor(Palette.Text); field.SetHintTextColor(Palette.Muted);
-        field.Background = Surface(12, Color.Rgb(0x10, 0x12, 0x18)); field.SetPadding(Dp(16), Dp(14), Dp(16), Dp(14)); field.SetMinHeight(Dp(58));
+        field.Background = Surface(12, Color.Rgb(0x00, 0x00, 0x00)); field.SetPadding(Dp(16), Dp(14), Dp(16), Dp(14)); field.SetMinHeight(Dp(58));
         field.SetSelectAllOnFocus(true); field.SaveEnabled = false;
         if (Build.VERSION.SdkInt >= BuildVersionCodes.O) field.ImportantForAutofill = ImportantForAutofill.NoExcludeDescendants;
         var layout = new LinearLayout.LayoutParams(-1, -2) { BottomMargin = Dp(14) };
@@ -263,6 +289,74 @@ public sealed class MainActivity : Activity
             busy = false;
             if (!IsDestroyed) { activityProgress.Visibility = ViewStates.Gone; foreach (var b in buttons) b.Enabled = true; networkStatus.Text = AndroidNetwork.Status(); }
         }
+    }
+    async Task CheckUpdatesQuietly()
+    {
+        var prefs = GetSharedPreferences("updates", FileCreationMode.Private)!;
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        if (!prefs.GetBoolean("automatic", true) || now - prefs.GetLong("lastCheck", 0) < 6 * 60 * 60) return;
+        try
+        {
+            var update = await AndroidUpdater.CheckAsync(this, lifetime.Token);
+            if (IsDestroyed) return;
+            prefs.Edit()!.PutLong("lastCheck", now)!.Apply();
+            availableUpdate = update;
+            if (updateShortcut is not null) updateShortcut.Text = update is null ? "Updates" : "Update available";
+        }
+        catch { /* Offline control and startup never depend on an update check. */ }
+    }
+    void ShowUpdates()
+    {
+        Shell("App updates"); backAction = BackToStart;
+        var prefs = GetSharedPreferences("updates", FileCreationMode.Private)!;
+        var settings = Card("Keep Arris Control current", "The app checks for Android builds on GitHub. Downloads and installation start only when you choose them.");
+        var automatic = new Switch(this) { Text = "Check automatically when the app opens", Checked = prefs.GetBoolean("automatic", true), TextSize = 16 };
+        automatic.SetTextColor(Palette.Text); automatic.SetPadding(0, Dp(14), 0, Dp(14));
+        automatic.CheckedChange += (_, e) => prefs.Edit()!.PutBoolean("automatic", e.IsChecked)!.Apply();
+        settings.AddView(automatic);
+        settings.AddView(Label("Installed build " + AndroidUpdater.InstalledVersion(this) + " · checks at most once every 6 hours", 13));
+        Action(settings, "Check for updates now", async () =>
+        {
+            status.Text = "Checking for a newer Android build…";
+            availableUpdate = await AndroidUpdater.CheckAsync(this, lifetime.Token); downloadedUpdate = false;
+            prefs.Edit()!.PutLong("lastCheck", DateTimeOffset.UtcNow.ToUnixTimeSeconds())!.Apply();
+            ShowUpdates(); status.Text = availableUpdate is null ? "You have the newest available Android build." : "An update is available.";
+        });
+        if (availableUpdate is { } release)
+        {
+            var update = Card("Android build " + release.Version, $"Download size: {release.Size / 1048576.0:0.0} MB. Your router logins stay saved during a compatible update.");
+            if (release.Notes.Length > 0) update.AddView(Label(release.Notes, 13));
+            if (!downloadedUpdate || !File.Exists(AndroidUpdater.ApkPath(this)))
+                Action(update, "Download update", async () =>
+                {
+                    if (!await Confirm("Download Android update?", $"Download build {release.Version} ({release.Size / 1048576.0:0.0} MB)? The phone's Internet connection may use mobile data.", "Download")) return;
+                    updateDownload?.Dispose(); updateDownload = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+                    var cancel = new Button(this) { Text = "Cancel download", TextSize = 16 };
+                    cancel.SetTextColor(Palette.Text); cancel.Background = Surface(); cancel.SetMinHeight(Dp(58));
+                    cancel.Click += (_, _) => updateDownload?.Cancel(); content.AddView(cancel);
+                    try
+                    {
+                        var progress = new Progress<long>(n => { if (!IsDestroyed) status.Text = $"Downloading update: {n / 1048576.0:0.0} / {release.Size / 1048576.0:0.0} MB"; });
+                        await AndroidUpdater.DownloadAsync(this, release, progress, updateDownload.Token);
+                        downloadedUpdate = true; ShowUpdates(); status.Text = "Download and signing key verified. Ready to install.";
+                    }
+                    finally { updateDownload?.Dispose(); updateDownload = null; if (cancel.Parent is ViewGroup parent) parent.RemoveView(cancel); }
+                });
+            else
+                Action(update, "Install verified update", async () =>
+                {
+                    AndroidUpdater.ValidateApk(this, AndroidUpdater.ApkPath(this), release.Version);
+                    if (!PackageManager!.CanRequestPackageInstalls())
+                    {
+                        await Message("Allow updates from Arris Control", "Android needs you to allow this app to install its updates. Enable “Allow from this source,” return here, then tap Install verified update again.");
+                        StartActivity(new Intent(Android.Provider.Settings.ActionManageUnknownAppSources, Android.Net.Uri.Parse("package:" + PackageName)));
+                        return;
+                    }
+                    StartActivity(AndroidUpdater.InstallIntent(this));
+                    status.Text = "Confirm the update in Android's installer.";
+                });
+        }
+        else settings.AddView(Label("Tap Check for updates now. Local router control continues to work when Internet updates are unavailable.", 13));
     }
     Task<bool> Confirm(string title, string body, string accept = "Apply change")
     {
@@ -348,6 +442,7 @@ public sealed class MainActivity : Activity
         });
         Action(advanced, "Set up a new router over Bluetooth", BleScanAndPick);
         Action(advanced, "Setup and mesh diagnostics (read-only)", SetupDiagnostics);
+        AddSavedBleCapture(advanced);
         content.AddView(Label("Local control · credentials encrypted on this phone", 12, color: Palette.Muted));
     }
     async Task ScanRouters()
@@ -551,19 +646,36 @@ public sealed class MainActivity : Activity
         var identityError = "";
         try { BleSetupProtocol.ValidateIdentity(new(model, serial.Trim().ToUpperInvariant(), BleSetupProtocol.NormalizeMac(mac))); }
         catch (RouterException ex) { identityError = ex.Message; }
-        if (BleSetupProtocol.IsUpgrading(obaState)) next.AddView(Label("The router reports an upgrade in progress. Setup writes are locked. Leave it powered and refresh the status after the upgrade finishes.", 14, color: Palette.Warning));
+        if (BleSetupProtocol.IsUpgrading(obaState)) next.AddView(Label("The onboarding state says UPGRADING. That alone does not confirm an active download. Record the state below to compare upgrade status and progress over time. Guided setup remains locked.", 14, color: Palette.Warning));
         if (identityError.Length > 0) next.AddView(Label("Setup is waiting for identity reads. " + identityError, 14, color: Palette.Warning));
         else if (obaState.Length == 0) next.AddView(Label("Setup is waiting for a readable onboarding state. Reconnect and refresh first.", 14, color: Palette.Warning));
         else if (!BleSetupProtocol.IsUpgrading(obaState)) Action(next, "Guided setup (experimental)", () => BleGuidedSetup(serial, mac, model), Tone.Primary);
+        if (appName.Trim().Equals("maxrouter", StringComparison.OrdinalIgnoreCase) && mode == "OB" &&
+            obaState.Length > 0 && !BleSetupProtocol.IsUpgrading(obaState) && !upgrade.Equals("InProcess", StringComparison.OrdinalIgnoreCase))
+        {
+            Button? initialize = null;
+            initialize = Action(next, "Initialize as primary router (experimental)", async () =>
+            {
+                if (!await Confirm("Initialize this factory-reset unit?",
+                    "The selected mAX unit reports OB (uninitialized). The official setup flow selects MAINAP before its later identity reads.\n\nSend that one role-selection write to your spare unit? It may restart its connection or start normal router initialization. No credential or Wi-Fi writes are included. Complete identity reads are still required afterward.", "Initialize primary")) return;
+                initialize!.Visibility = ViewStates.Gone;
+                try { await BlePrimaryInitialization.InitializeAsync(ble!, lifetime.Token); }
+                catch { ble?.Dispose(); ble = null; throw; }
+                ble?.Dispose(); ble = new BleManager(this); await BleConnectAndInspect(device);
+            });
+        }
         Action(next, "Reconnect and refresh identity / state", async () =>
         {
             ble?.Dispose(); ble = new BleManager(this); await BleConnectAndInspect(device);
         });
+        Action(next, "Record state for 3 minutes (read-only)", () => CaptureBleState(device), Tone.Primary);
+        AddSavedBleCapture(next);
         Action(next, "Export Bluetooth activity log", () =>
         {
             ShowReport("Bluetooth activity log", "Read errors and status codes; identity and provisioning values are withheld.", BleLog.Export()); return Task.CompletedTask;
         });
         Action(next, "Disconnect", () => { ble?.Dispose(); ble = null; ShowConnect(); return Task.CompletedTask; });
+        AddManualBleCommands(device, appName, mode, serial, mac, obaState, upgrade);
         content.AddView(Label("Inspection is read-only. Offline setup is experimental; each phase needs confirmation.", 12, color: Palette.Muted));
     }
 

@@ -40,7 +40,7 @@ for _ in range(45):
         # Sessions 1 and 2 read identity, mode and one page (3 each); the legacy upgrade reads identity and mode (2).
         if fixture.logins != 4 or fixture.anonymous_reads < 1 or fixture.protected_reads < 10:
             annotate(f'Fixture counters: logins={fixture.logins} (expected 4), anonymous_reads={fixture.anonymous_reads}, protected_reads={fixture.protected_reads} (expected >= 10)')
-            raise SystemExit('Fixture did not observe the expected anonymous scan and exactly three authenticated sessions (none from the impostor check)')
+            raise SystemExit('Fixture did not observe the expected anonymous scan and exactly four authenticated sessions (none from the impostor check)')
         print('PASS: APK UI, Android Keystore, anonymous API scan, actual HTTPS login/cookies, saved address update, reconnect, certificate-pin impostor refusal, legacy pin upgrade and pending offline-login verification without cloud.')
         adb('root')
         adb('wait-for-device')
@@ -59,3 +59,38 @@ else:
     Path('artifacts/android-smoke.log').write_text(adb('logcat', '-d'))
     annotate('Android checks did not finish within 90 seconds.\n' + adb('logcat', '-d', '-s', 'ArrisControlSelfTest:E', 'AndroidRuntime:E', 'DOTNET:I')[-3500:])
     raise SystemExit('Android offline checks did not finish within 90 seconds')
+
+# Exercise the actual Android archive parser/content provider, then update the
+# installed APK in place and verify its existing Keystore-encrypted login.
+probe = list(Path('update-probe').glob('*-Signed.apk'))
+if len(probe) != 1:
+    raise SystemExit('Expected one update probe APK')
+adb('root')
+adb('wait-for-device')
+cache = '/data/user/0/com.hoodnewssanaa.arriscontrol/cache/updates'
+adb('shell', 'mkdir', '-p', cache)
+adb('push', str(probe[0]), cache + '/candidate.apk')
+adb('push', 'update-probe/foreign.apk', cache + '/foreign.apk')
+owner = adb('shell', 'stat', '-c', '%u', '/data/user/0/com.hoodnewssanaa.arriscontrol').strip()
+if not owner.isdigit():
+    raise SystemExit('Could not determine the test app UID')
+adb('shell', 'chown', '-R', owner + ':' + owner, cache)
+def app_update_check(flag):
+    adb('logcat', '-c')
+    adb('shell', 'am', 'force-stop', 'com.hoodnewssanaa.arriscontrol')
+    adb('shell', 'am', 'start', '-W', '-n', component, '--ez', flag, 'true')
+    for _ in range(20):
+        time.sleep(1)
+        adb('shell', 'uiautomator', 'dump', '/sdcard/arris-update.xml')
+        ui = adb('shell', 'cat', '/sdcard/arris-update.xml')
+        if 'PASS: Android update verification.' in ui:
+            return
+        if 'Operation result' in ui:
+            break
+    errors = adb('logcat', '-d', '-s', 'ArrisControlSelfTest:E', 'AndroidRuntime:E', 'DOTNET:I')
+    annotate('Android updater check failed: ' + errors[-3500:])
+    raise SystemExit('Android updater check failed')
+app_update_check('updaterSelfTest')
+adb('install', '-r', str(probe[0]))
+app_update_check('updateRetentionSelfTest')
+print('PASS: APK update signer/version checks, foreign signing-key refusal, private installer URI and encrypted-login retention after an in-place Android upgrade.')

@@ -12,6 +12,7 @@ Credentials/
 .reports/
 .firmware-downloads/
 *.pfx
+*.p12
 *.pem
 *.key
 *.apk

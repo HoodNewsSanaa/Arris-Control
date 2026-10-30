@@ -14,6 +14,11 @@ on:
       - '*.cs'
       - '.github/workflows/android.yml'
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the tested APK after permanent signing is configured
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -60,10 +65,39 @@ jobs:
       - name: Install Android workload
         run: dotnet workload install android
       - name: Build standalone installable APK
-        run: >-
-          dotnet publish Android/Arris-Control.Android.csproj -c Release
-          -p:AndroidPackageFormats=apk -p:AndroidKeyStore=false
-          -p:ApplicationVersion=${{ github.run_number }} -o artifacts
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ github.event_name != 'pull_request' && secrets.ANDROID_KEYSTORE_BASE64 || '' }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.ANDROID_KEYSTORE_PASSWORD || '' }}
+          ANDROID_KEY_ALIAS: ${{ github.event_name != 'pull_request' && secrets.ANDROID_KEY_ALIAS || '' }}
+        run: |
+          signing=(-p:AndroidKeyStore=false)
+          stable=false
+          trap 'rm -f "$RUNNER_TEMP/release.p12" "$RUNNER_TEMP/foreign.p12"' EXIT
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ] && [ -n "$ANDROID_KEYSTORE_PASSWORD" ] && [ -n "$ANDROID_KEY_ALIAS" ]; then
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.p12"
+            chmod 600 "$RUNNER_TEMP/release.p12"
+            signing=(-p:AndroidKeyStore=true "-p:AndroidSigningKeyStore=$RUNNER_TEMP/release.p12" "-p:AndroidSigningKeyAlias=$ANDROID_KEY_ALIAS" -p:AndroidSigningStorePass=env:ANDROID_KEYSTORE_PASSWORD -p:AndroidSigningKeyPass=env:ANDROID_KEYSTORE_PASSWORD)
+            stable=true
+          fi
+          echo "STABLE_SIGNING=$stable" >> "$GITHUB_ENV"
+          if [ "$stable" != true ]; then
+            echo "::warning title=Signing setup pending::Building a test APK only. Public updater releases require the permanent signing secrets."
+          fi
+          dotnet publish Android/Arris-Control.Android.csproj -c Release -p:AndroidPackageFormats=apk "${signing[@]}" -p:ApplicationVersion=${{ github.run_number }} -o artifacts
+          # Version properties alone can leave the previous generated manifest
+          # in the incremental Android build. Keep the first copied APK, then
+          # clean intermediates before building the genuinely newer probe.
+          dotnet clean Android/Arris-Control.Android.csproj -c Release
+          dotnet publish Android/Arris-Control.Android.csproj -c Release -p:AndroidPackageFormats=apk "${signing[@]}" -p:ApplicationVersion=$(( ${{ github.run_number }} + 1 )) -o update-probe
+          keytool -genkeypair -alias fixture -keyalg RSA -keysize 2048 -validity 2 -dname "CN=Fictional CI signer" -storetype PKCS12 -keystore "$RUNNER_TEMP/foreign.p12" -storepass fictional-ci-password -keypass fictional-ci-password
+          signer=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          "$signer" sign --ks "$RUNNER_TEMP/foreign.p12" --ks-key-alias fixture --ks-pass pass:fictional-ci-password --key-pass pass:fictional-ci-password --out update-probe/foreign.apk update-probe/*-Signed.apk
+          if [ "$stable" = true ]; then
+            certificate=$("$signer" verify --print-certs artifacts/*-Signed.apk | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -1)
+            expected=$(tr -d '\r\n ' < Android/release-signing.sha256)
+            test "$certificate" = "$expected"
+            echo "::notice title=Permanent APK signer::$certificate"
+          fi
       - name: Collect APK and checksum
         run: |
           python3 - <<'PY'
@@ -101,7 +135,7 @@ jobs:
           if-no-files-found: error
           retention-days: 90
       - name: Publish Android preview download
-        if: github.event_name == 'push'
+        if: (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish)) && env.STABLE_SIGNING == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-

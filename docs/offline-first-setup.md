@@ -54,7 +54,7 @@ password is not saved. Pending records are available from the start screen
 after a process restart. They are not shown as verified saved routers.
 
 Each phase checks that the full writable interface exists and re-reads the
-serial, WAN MAC and onboarding state. A reported UPGRADING state locks writes.
+serial, WAN MAC and onboarding state. A reported UPGRADING state locks guided-provisioning writes.
 All writes are sequential and acknowledged. Failed,
 cancelled or uncertain writes permanently stop that session; there is no
 automatic retry or automatic resume. The UI closes the BLE connection after
@@ -101,10 +101,45 @@ download progress (aa12) separately. An onboarding UPGRADING string by itself
 does not establish what is downloading or whether an ARRIS server is required.
 The stock pairing flow reads the application name and device mode, and can assign
 MAINAP to a unit reporting OB before its later registration/identity steps.
-This role-assignment prerequisite is not implemented by the current experiment;
-its effect on the missing identity fields still needs hardware observation.
+When the device reports the expected maxrouter application and OB mode, and is
+not reporting an active upgrade, inspection offers a separately confirmed
+primary-router initialization. It rechecks those values, sends MAINAP once and
+reads the role back. A lost acknowledgement is reported as unconfirmed and is
+never retried. Credential/Wi-Fi writes still require complete identity afterward.
+Its effect on this unit's missing identity fields needs hardware observation.
+
+An explicit rejected read (including status 115 from the test unit) is shown on
+its field and does not prevent reading other diagnostic fields. Incomplete,
+timed-out or cancelled operations still require reconnection. Status 115's exact
+firmware-specific meaning is unconfirmed; it is not treated as successful data.
 
 The target is operation when ARRIS services are unavailable. A test with WAN
 Internet present and ARRIS destinations blocked distinguishes that from a
 completely disconnected WAN. App-side omission of cloud requests alone does not
 prove that the router firmware is independent of those services.
+
+## Capture before an individual command
+
+Android 0.3.0 provides a bounded read-only capture on the Bluetooth inspection
+screen. Record the stuck unit before changing role/completion. The saved report
+keeps independent aa08/aa11/aa12/aa13 readings and raw bytes, not an interpretation
+that UPGRADING must be a genuine firmware download. GATT 115 is preserved without
+assigning it an unverified meaning. A complete rejected read permits later
+read-only fields; incomplete reads end the recording and close the connection.
+
+The same screen exposes separate, confirmed MAINAP/EXTENDER and SETOBCOMPLETE
+experiments. They permit incomplete bootstrap identity and UPGRADING, but recheck
+every previously known application/role/serial/WAN-MAC value on a fresh connection.
+They require a uniquely mapped onboarding interface and a fresh maxrouter app
+identity, perform one acknowledged write, attempt nonsecret read-back and always
+disconnect. No write is retried. A real update could be disrupted by changing
+onboarding. Guided setup retains full identity/upgrade guards. No live command or
+successful factory setup has been demonstrated by CI.
+
+To establish firmware independence, compare this baseline with phone Bluetooth
+HCI logging and router WAN captures during controlled official setup. The Android
+recorder cannot observe another app's Bluetooth commands or decrypt WAN HTTPS.
+Use a working unit as a management baseline without resetting it. Capture raw
+network/HCI originals privately; publish only redacted extracts. Server emulation
+and skip-update behavior are still hypotheses until traffic and trust behavior
+are verified.
