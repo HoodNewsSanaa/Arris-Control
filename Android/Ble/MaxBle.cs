@@ -93,7 +93,7 @@ internal sealed class BleManager : Java.Lang.Object
     public async Task ConnectAsync(BluetoothDevice device, CancellationToken token)
     {
         bridge = new GattBridge();
-        gatt = device.ConnectGatt(context, false, bridge, BluetoothTransport.Le)
+        gatt = device.ConnectGatt(context, false, bridge, BluetoothTransports.Le)
             ?? throw new RouterException("Could not open a Bluetooth connection to the router.");
         await bridge.Connected.WaitAsync(TimeSpan.FromSeconds(20), token);
         if (!gatt.DiscoverServices()) throw new RouterException("Could not read the router's Bluetooth services.");
