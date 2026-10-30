@@ -8,15 +8,27 @@ The interface uses a black background, white text, large outlined controls, 60 d
 
 ## Connect
 
-1. Join the Arris Wi-Fi (or the same local Ethernet network). If Android warns that Internet is unavailable, choose to stay connected.
-2. Open Arris Control. Select a saved router, or acquire its existing local management credential through your ARRIS account.
-3. For account acquisition, import the protocol reference from an installed SURFboard Central app, or select your own SURFboard Central 4.3.5 APK/XAPK/BuildConfig.java. Nothing is installed or executed from the imported reference. The supported protocol configuration is validated and cached encrypted.
-4. Enter your ARRIS account email/password, sign in, select the exact owned unit, and enter its current private IPv4 address (commonly `192.168.7.1` in router mode). Initial acquisition needs Internet; local management after verification does not.
-5. The app verifies certificate MAC, authenticated serial and protected routing mode before saving a local credential. Alternatively enter an existing **local management** username/password, serial and certificate MAC; these are not the Wi-Fi password.
+1. Join your router's Wi-Fi.
+2. Open Arris Control, enter your ARRIS / SURFboard Central account email and password, and tap **Sign in**.
 
-Account passwords and cloud session tokens are not retained. Acquired local credentials are retained encrypted so local verification can be retried without signing in again. Normal settings reads/writes go directly to local port 50011. The app binds its own local traffic to connected Wi-Fi/Ethernet, including networks Android has not validated for Internet. Account sign-in restores the app's default Internet routing, allowing cellular fallback where Android provides it.
+That's it. The app finds the SURFboard settings it needs, signs in, picks your router (or asks if your account has several), finds it on your Wi-Fi by its certificate, verifies it, and connects. Your account password and cloud tokens are never saved; the router's local login is saved encrypted, and later launches reconnect automatically without signing in.
 
-Windows DPAPI-encrypted JSON cannot be imported on Android. Android Keystore credentials are bound to this app installation; clearing app data or uninstalling loses them. Backups and screenshots are disabled. The router's certificate public key is pinned inside the encrypted credential at the first successful login; later connections refuse any other certificate before sending a credential. See **Router certificate pinning** in the main README.
+**SURFboard settings.** Account sign-in needs a few settings from the SURFboard Central app. Arris Control looks for them automatically: its own encrypted copy, then a copy bundled into a personal build (below), then the installed SURFboard Central app. If none is found, it offers to install SURFboard Central from Google Play. You don't need to open or set it up, and you can uninstall it after the first sign-in. You can also pick a SURFboard Central 4.3.5 APK/XAPK under **More options**.
+
+**More options** also has: scanning for routers, a manual router address, a previously acquired credential, an existing local management login (not the Wi-Fi password), and Bluetooth setup for a factory-reset router.
+
+### Personal builds with the settings bundled
+
+Public releases never include ARRIS's app client secret. If you build your own APK, you can bundle it so sign-in never needs SURFboard Central:
+
+```sh
+dotnet run --project Tests/Arris-Control.Tests.csproj -- --export-protocol /path/to/SURFboardCentral_4.3.5.xapk Android/protocol.local.json
+dotnet publish Android/Arris-Control.Android.csproj -c Release -p:AndroidPackageFormats=apk -o artifacts
+```
+
+`Android/protocol.local.json` is plaintext and gitignored. Keep it and any APK built with it private. CI refuses to build if the file exists, and a self-test fails if a CI build embeds it.
+
+Android Keystore credentials are bound to this app installation; clearing app data or uninstalling loses them. Backups and screenshots are disabled. Account fields allow password-manager autofill; router credentials do not. The router's certificate public key is pinned inside the encrypted credential at the first successful login; later connections refuse any other certificate before sending a credential. See **Router certificate pinning** in the main README.
 
 ## Find the router after an address change
 
