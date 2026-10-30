@@ -668,13 +668,8 @@ public sealed class MainActivity : Activity
             }
             var after = await BleReadText(MaxBle.ObaState);
             BleLog.Add($"setup state after {label}: {(after.Length > 0 ? after : "unknown")}");
-            var ssidSeen = AndroidNetwork.Status();
             status.Text = label + " written. Setup state: " + (after.Length > 0 ? after : "unknown") + ".";
-            await Message("Written", $"{label} was written.
-
-Setup state now: {(after.Length > 0 ? after : "unknown")}.
-
-Remember a written value is not proof the router applied it. Export the log to review the full sequence.");
+            await Message("Written", $"{label} was written.\n\nSetup state now: {(after.Length > 0 ? after : "unknown")}.\n\nRemember a written value is not proof the router applied it. Export the log to review the full sequence.");
         }
 
         Action(writes, "1 · Write network name (SSID)", () => EncryptedWrite("the SSID", MaxBle.P11Ssid, () => ssid.Text ?? "", true), Tone.Secondary);
