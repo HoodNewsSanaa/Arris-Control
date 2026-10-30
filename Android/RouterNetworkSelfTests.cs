@@ -10,7 +10,13 @@ internal static class RouterNetworkSelfTests
         const string host="10.0.2.2";
         const string mac="001122334455";
         AndroidNetwork.UseLocal();
+        // The probe has a 3 s budget for TLS plus one API read; a cold CI emulator can miss it, so allow retries.
         var endpoints=await RouterDiscovery.DiscoverApisAsync([host],null,token);
+        for(var attempt=1;endpoints.Count==0 && attempt<3;attempt++)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(2),token);
+            endpoints=await RouterDiscovery.DiscoverApisAsync([host],null,token);
+        }
         if(endpoints.Count!=1 || endpoints[0].Mac!=mac || endpoints[0].Status!="SessionTimeout" || !CertificatePin.IsValid(endpoints[0].Pin))
             throw new InvalidOperationException("Anonymous ARRIS API discovery failed against the TLS fixture: "+
                 (endpoints.Count==0?"no endpoint":string.Join("; ",endpoints.Select(e=>$"{e.Address} mac={e.Mac} status={e.Status} pinLength={e.Pin.Length} pinValid={CertificatePin.IsValid(e.Pin)}"))));
