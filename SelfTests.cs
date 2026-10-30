@@ -72,6 +72,37 @@ internal static class SelfTests
             ["WIFI_5G_ALL"]=JsonNode.Parse("{\"STATUS\":\"OK\",\"WIFI_5G\":[{\"SSIDNAME\":\"Home Net\",\"PASSPHRASE\":\"hunter22hunter\",\"CHANNEL\":\"44\"}]}")!.AsObject()},
             [new("DEVICE_INFO_ALL",200,"OK",DateTimeOffset.Now,true),new("WIFI_5G_ALL",200,"OK",DateTimeOffset.Now,true),new("WPS",null,"Unsupported",DateTimeOffset.Now,false)],[],DateTimeOffset.Now),"Test","0.0.0");
         Assert(report.Contains("model W31") && report.Contains("[--] WPS") && report.Contains("WIFI_5G[0].CHANNEL = 44") && !report.Contains("SECRETSERIAL1") && !report.Contains("Home Net") && !report.Contains("hunter22"),"Diagnostics report leaked or lost information.");
+        // Access reporting remains a separate GET-only path. Account secrets
+        // can be nested objects/arrays in firmware variants, not only strings.
+        Assert(Catalog.ReadKeys.IsSupersetOf(Diagnostics.AccessKeys) &&
+            !Diagnostics.Keys.Contains("LOGINCFG_ALL") && !Diagnostics.Keys.Contains("REMOTE_CONFIG_ALL"),
+            "Access configuration entered the ordinary diagnostics sweep.");
+        var accessData=JsonNode.Parse("""
+            {"STATUS":"OK","LOGINCFG":{"WEBUIENABLE":"0","SSOUSERNAME":"PrivateAdmin",
+             "USERNAME":{"value":"NeverShareNestedUsername"},
+             "SSOPASSWORD":{"value":"NeverShareNestedPassword"},
+             "WEBUIPASSWORD":["NeverShareArrayPassword"],
+             "PASSWORD":"NeverShareScalarPassword"}}
+            """)!.AsObject();
+        var accessSnapshot=new Snapshot(Diagnostics.AccessPage,new(){["LOGINCFG_ALL"]=accessData},
+            [new("LOGINCFG_ALL",200,"OK",DateTimeOffset.Now,true)],[],DateTimeOffset.Now);
+        var accessReport=Diagnostics.Report(accessSnapshot,"Test","0.0.0");
+        Assert(accessReport.Contains("software access diagnostics") && accessReport.Contains("WEBUIENABLE = 0") &&
+            !accessReport.Contains("PrivateAdmin") && !accessReport.Contains("NeverShare"),
+            "Access report leaked an account value or hid the web-interface state.");
+        Assert(Settings.Sections(accessSnapshot).Count==0,"Access configuration became editable.");
+        Refuses(()=>Settings.ValidateEnvelope("""{"REQUEST":{"OPERTYPE":"MODIFY","LOGINCFG":{"WEBUIENABLE":"1"}}}"""),
+            "Read-only access diagnostics enabled a configuration write.");
+        var accessWire=new FakeWire();
+        foreach(var key in Diagnostics.AccessKeys)
+            if(!accessWire.State.ContainsKey(key))accessWire.State[key]=new JsonObject{["STATUS"]="OK"};
+        accessWire.State["LOGINCFG_ALL"]=accessData;
+        using(var accessClient=new RouterClient(new CredentialRecord("unused","TESTSERIAL123","001122334455","192.168.7.1"),accessWire))
+        {
+            var accessReads=accessClient.ReadPageAsync(Diagnostics.AccessPage).GetAwaiter().GetResult();
+            Assert(accessWire.Writes==0 && accessReads.Reads.All(r=>r.Readable),
+                "Access diagnostics failed its authenticated read sweep or sent a write.");
+        }
     }
     public static async Task RunAsync()
     {

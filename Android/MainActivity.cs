@@ -1022,7 +1022,7 @@ public sealed partial class MainActivity : Activity
     {
         status.Text = "Reading " + currentPage.Name + "…";
         var snapshot = await Task.Run(() => client!.ReadPageAsync(currentPage, lifetime.Token), lifetime.Token);
-        if (currentPage.Id == "diagnostics") { dirty = false; ShowDiagnostics(snapshot); return; }
+        if (currentPage.Id is "diagnostics" or "accessdiagnostics") { dirty = false; ShowDiagnostics(snapshot); return; }
         dirty = false; content.AddView(Label(currentPage.Description.Replace("this PC", "this phone")));
         if (currentPage.Id == "tools") ShowTools(snapshot);
         if ((currentPage.Id is "overview" or "internet") && snapshot.Data.TryGetValue("DEVICEOPERMODE_ALL", out var modes) && modes["DEVICEOPERMODE"] is JsonObject mode)
@@ -1055,7 +1055,10 @@ public sealed partial class MainActivity : Activity
         var version = PackageManager!.GetPackageInfo(PackageName!, 0)?.VersionName ?? "?";
         var report = Diagnostics.Report(snapshot, "Android", version);
         var ok = snapshot.Reads.Count(r => r.Readable);
-        var card = Card("Diagnostics report", "Read-only — nothing on the router was changed. Values that could identify you (names, addresses, passwords) are replaced. Copy or share it to help add support for more settings.",
+        var access = snapshot.Page.Id == Diagnostics.AccessPage.Id;
+        var card = Card(access ? "Software access report" : "Diagnostics report", access
+            ? "Reads login, web-management and remote-access configuration. Passwords and identifying values are replaced. This report does not enable services or change credentials."
+            : "Read-only — nothing on the router was changed. Values that could identify you (names, addresses, passwords) are replaced. Copy or share it to help add support for more settings.",
             chipText: $"{ok}/{snapshot.Reads.Count} answered", chipColor: ok > 0 ? Palette.Success : Palette.Warning);
         Action(card, "Copy report", () =>
         {
@@ -1068,6 +1071,10 @@ public sealed partial class MainActivity : Activity
         {
             var send = new Intent(Intent.ActionSend); send.SetType("text/plain"); send.PutExtra(Intent.ExtraText, report);
             StartActivity(Intent.CreateChooser(send, "Share diagnostics report")); return Task.CompletedTask;
+        });
+        if (!access) Action(card, "Software access diagnostics", async () =>
+        {
+            currentPage = Diagnostics.AccessPage; dirty = false; ShowRouter(); await Read();
         });
         var text = Label(report, 11, color: Palette.Text);
         text.SetTypeface(Android.Graphics.Typeface.Monospace, Android.Graphics.TypefaceStyle.Normal); text.SetTextIsSelectable(true);

@@ -92,6 +92,13 @@ The address field now applies to **saved-router reconnect** as well as account v
 
 **Diagnostics** (in the section list) reads about 60 endpoints and reports which ones your firmware answers, with field names and safe values. Names, addresses, MACs, serials and passwords are replaced. It never writes anything. Use **Copy report** or **Share report** to send the output.
 
+From that report, **Software access diagnostics** runs a separate authenticated
+read-only sweep of login/web-interface configuration, remote access, vendor
+information, cloud features and metrics. It reports whether the known groups
+exist and describes their returned fields, with account values and whole secret
+subtrees hidden. It does not enable services or expose configuration editors.
+Some firmware will return Unsupported/InvalidOption for particular groups.
+
 The app shares the Windows protocol and settings engine: status, mesh/client fields, bridge/bypass ON/OFF, Wi-Fi names/passwords, guest settings, DNS, DHCP, UPnP, reservations/forwarding, priority/QoS, parental-control enable and LED state. Only fields returned by the unit's firmware have editors. All returned nonsecret fields appear below the forms. Settings require a preview confirmation, fresh identity/current-value checks, and a single write with read-back. A lost save reply is reported as unknown and never retried.
 
 This does not implement factory onboarding, account recovery, MFA challenges, firmware updates or all vendor-app features. A visible SSID that refuses association/IP assignment must be diagnosed separately; the app cannot contact a unit until the phone has a working local network connection.

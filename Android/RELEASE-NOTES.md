@@ -1,3 +1,14 @@
+Android 0.3.1 — software access diagnostics:
+
+- Diagnostics now offers a separate Software access diagnostics report for
+  login/web-interface configuration, remote access, vendor information and
+  other read groups observed in the official app.
+- The report is read-only and does not enable a web interface, SSH, remote
+  management or firmware changes. Passwords and identifying values are hidden,
+  including secrets nested inside objects or arrays.
+- This helps investigate software-only access on W30/WR11AXER1. It does not
+  claim root access or cross-vendor firmware compatibility.
+
 Android 0.3.0 — onboarding capture and individual commands:
 
 - Record up to three minutes of read-only Bluetooth state with exact status bytes,

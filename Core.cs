@@ -73,7 +73,7 @@ internal static class Catalog
         new("capabilities","Capabilities","Feature information returned by this firmware.",["CAPABILITIES_ALL","FEATURECAPABILITIES_ALL","DEVICESETTINGSFEATURE_ALL","WIFISETTINGSFEATURE_ALL","LANSETTINGSFEATURE_ALL","WANSETTINGSFEATURE_ALL","PARENTALCONTROLFEATURE_ALL","CLOUDSETTINGSFEATURE_ALL"]),
         Diagnostics.Page
     ];
-    public static readonly HashSet<string> ReadKeys = Pages.SelectMany(p => p.Keys).ToHashSet(StringComparer.Ordinal);
+    public static readonly HashSet<string> ReadKeys = Pages.SelectMany(p => p.Keys).Concat(Diagnostics.AccessKeys).ToHashSet(StringComparer.Ordinal);
     public static readonly Regex Secret = new("password|passwd|passphrase|psk|secret|token|credential|authorization|private.?key|sso.?key|wpa.*key|wep.*key|(^|_)pin($|_)|(^|_)key($|_)",RegexOptions.IgnoreCase);
     public static string Text(JsonNode? value) => value is JsonValue v && v.TryGetValue<string>(out var s) ? s : value?.ToJsonString() ?? "";
     public static List<FieldRow> Flatten(JsonNode node, string source)
@@ -448,6 +448,14 @@ internal static class Diagnostics
         "PARENT_KEYWORD_FILTER_ALL","TRUSTED_DEVICE_ALL","LED_DISPLAY_ALL","LEDRING_ALL","TIME_ALL","UPDATE_ALL"];
     public static readonly Page Page=new("diagnostics","Diagnostics",
         "Read-only check of which router features this firmware supports. Nothing is changed. Values that could identify you are replaced.",Keys);
+    // Separate, user-selected report for software-access investigation. These
+    // GET groups are observed in the official app; no setter is exposed here.
+    public static readonly string[] AccessKeys=[
+        "DEVICE_INFO_ALL","FIRMWARE_ALL","DEVICESTATUS_ALL","DEVICESETTINGSFEATURE_ALL",
+        "LOGINCFG_ALL","REMOTE_CONFIG_ALL","VENDOR_INFO_ALL","CLOUDSETTINGSFEATURE_ALL",
+        "GET_CAPABILITIES_ALL","METRICS_ALL","LASTACCESSTIME_ALL"];
+    public static readonly Page AccessPage=new("accessdiagnostics","Software access diagnostics",
+        "Read-only login, web-management and remote-access configuration. Passwords and identifying values are replaced in the report.",AccessKeys);
     const int MaxLinesPerKey=60;
     static readonly Regex Personal=new("SSID|NAME|ALIAS|HOST|URL|DESCRIPTION|SERIAL|FRIENDLY|TEXT|LABEL|EMAIL|USER|ADDRESS|MAC|BSSID|KEYWORD|ACCOUNT|ID$|IPV4|IPV6|GATEWAY|DNS",RegexOptions.IgnoreCase);
     static readonly Regex Ipv4=new(@"^\d{1,3}(?:\.\d{1,3}){3}$");
@@ -474,6 +482,11 @@ internal static class Diagnostics
         void Visit(JsonNode? n,string path,string leaf,int depth)
         {
             if(lines.Count>=MaxLinesPerKey || depth>12)return;
+            // A secret may be an object/array instead of a scalar. Suppress its
+            // entire subtree before inspecting descendants such as 'value'.
+            if(Catalog.Secret.IsMatch(leaf)){lines.Add(path+" = [hidden]");return;}
+            if((n is JsonObject or JsonArray) && Personal.IsMatch(leaf))
+            {lines.Add(path+" = [identifying value withheld]");return;}
             if(n is JsonObject o)
             {
                 foreach(var kv in o)if(!(path.Length==0 && kv.Key=="STATUS"))Visit(kv.Value,path.Length==0?kv.Key:path+"."+kv.Key,kv.Key,depth+1);
@@ -499,7 +512,8 @@ internal static class Diagnostics
             return row is null ? "unknown" : Value(row.Field.Split('.').Last(),row.Value);
         }
         var sb=new StringBuilder();
-        sb.AppendLine($"Arris Control diagnostics · {platform} {version} · {snapshot.Time:yyyy-MM-dd HH:mm}");
+        var title=snapshot.Page.Id==AccessPage.Id?"software access diagnostics":"diagnostics";
+        sb.AppendLine($"Arris Control {title} · {platform} {version} · {snapshot.Time:yyyy-MM-dd HH:mm}");
         sb.AppendLine($"Router model {Pick("DEVICE_INFO_ALL","MODEL")} · firmware {Pick("FIRMWARE_ALL","VERSION")} · mode {Pick("DEVICEOPERMODE_ALL","^MODE$")}");
         sb.AppendLine($"{snapshot.Reads.Count(r=>r.Readable)}/{snapshot.Reads.Count} endpoints answered · read-only, nothing was changed");
         foreach(var read in snapshot.Reads)

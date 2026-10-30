@@ -154,9 +154,10 @@ jobs:
         if: (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish)) && env.STABLE_SIGNING == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh release create android-preview-${{ github.run_number }}
-          artifacts/Arris-Control-android.apk artifacts/SHA256SUMS-android.txt artifacts/Android-UI-preview.png
-          --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA"
-          --title "Arris Control Android 0.3.0 (build ${{ github.run_number }})"
+        run: |
+          version=$(python3 -c 'from xml.etree import ElementTree as E; print(E.parse("Android/Arris-Control.Android.csproj").findtext(".//ApplicationDisplayVersion"))')
+          gh release create android-preview-${{ github.run_number }} \
+          artifacts/Arris-Control-android.apk artifacts/SHA256SUMS-android.txt artifacts/Android-UI-preview.png \
+          --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+          --title "Arris Control Android $version (build ${{ github.run_number }})" \
           --notes-file Android/RELEASE-NOTES.md --latest=true
