@@ -95,3 +95,16 @@ another characteristic cannot complete the pending read. An incomplete GATT
 operation requires a fresh connection. The characteristic IDs have been checked
 against the inspected 4.3.5 BLEAttributes enum; identifiers are never invented or
 replaced by the Bluetooth advertisement address.
+
+Inspection also reports the application name (aa02), upgrade status (aa13) and
+download progress (aa12) separately. An onboarding UPGRADING string by itself
+does not establish what is downloading or whether an ARRIS server is required.
+The stock pairing flow reads the application name and device mode, and can assign
+MAINAP to a unit reporting OB before its later registration/identity steps.
+This role-assignment prerequisite is not implemented by the current experiment;
+its effect on the missing identity fields still needs hardware observation.
+
+The target is operation when ARRIS services are unavailable. A test with WAN
+Internet present and ARRIS destinations blocked distinguishes that from a
+completely disconnected WAN. App-side omission of cloud requests alone does not
+prove that the router firmware is independent of those services.

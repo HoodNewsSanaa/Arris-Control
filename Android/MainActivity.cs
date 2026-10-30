@@ -526,9 +526,13 @@ public sealed class MainActivity : Activity
             }
             catch (RouterException ex) { errors[uuid] = ex.Message; return ""; }
         }
+        // The official pairing flow identifies the application, then reads mode
+        // before hardware identity. These are reads only; do not assign a role here.
+        string appName = await ReadField(MaxBle.AppName), mode = await ReadField(MaxBle.DeviceMode);
         string serial = await ReadField(MaxBle.Serial), mac = await ReadField(MaxBle.WanMac);
-        string model = await ReadField(MaxBle.ModelNumber), mode = await ReadField(MaxBle.DeviceMode);
+        string model = await ReadField(MaxBle.ModelNumber);
         string wan = await ReadField(MaxBle.WanStatus), obaState = await ReadField(MaxBle.ObaState);
+        string upgrade = await ReadField(MaxBle.UpgradeStatus), download = await ReadField(MaxBle.DownloadProgress);
 
         Shell("Router over Bluetooth"); backAction = BackToStart;
         var looksArris = serial.Length > 0 || model.Length > 0;
@@ -539,6 +543,8 @@ public sealed class MainActivity : Activity
             color: v.Length > 0 ? Palette.Text : Palette.Warning));
         Row("Model", MaxBle.ModelNumber, model); Row("Serial", MaxBle.Serial, serial); Row("WAN MAC", MaxBle.WanMac, mac);
         Row("Routing mode", MaxBle.DeviceMode, mode); Row("WAN status", MaxBle.WanStatus, wan); Row("Onboarding state", MaxBle.ObaState, obaState);
+        Row("Device application", MaxBle.AppName, appName); Row("Upgrade status", MaxBle.UpgradeStatus, upgrade);
+        Row("Download progress", MaxBle.DownloadProgress, download);
         if (!looksArris) info.AddView(Label("This device didn't return mAX identity values. It may not be an ARRIS router, or not in setup mode.", 13, color: Palette.Warning));
 
         var next = Card("What next");

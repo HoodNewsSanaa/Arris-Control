@@ -44,6 +44,8 @@ GitHub CI tests protocol fixtures and real Android Keystore on an emulator. Live
 - Always show Model, Serial, WAN MAC and state fields, with explicit empty,
   unavailable or GATT error results instead of hiding failed reads.
 - Add reconnect/refresh and activity-log export directly to Bluetooth inspection.
+- Include the device application, upgrade status and download progress as separate
+  read-only fields to investigate a persistent onboarding UPGRADING response.
 - Read Android 13+ callback value snapshots and ignore callbacks for unrelated
   characteristics; require reconnection after incomplete GATT operations.
 - Lock setup during the reported UPGRADING state and recheck state before each

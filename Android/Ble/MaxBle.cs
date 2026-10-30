@@ -17,6 +17,9 @@ internal static class MaxBle
 {
     public const string ServiceOba = "0000aa00-0000-1000-8000-00805f9b34fb";
     public const string ServiceLca = "0000ab00-0000-1000-8000-00805f9b34fb";
+    public const string AppName = "0000aa02-0000-1000-8000-00805f9b34fb";
+    public const string UpgradeStatus = "0000aa13-0000-1000-8000-00805f9b34fb";
+    public const string DownloadProgress = "0000aa12-0000-1000-8000-00805f9b34fb";
 
     // Read during inspection / setup.
     public const string Serial       = "0000aa04-0000-1000-8000-00805f9b34fb";
@@ -49,7 +52,8 @@ internal static class MaxBle
     // Identity/state characteristics that are safe to read for diagnostics (serial is redacted in the report).
     public static readonly (string Uuid, string Label)[] SafeReads =
     [
-        (ModelNumber, "Model"), (Serial, "Serial"), (DeviceMode, "Device mode"), (ObaState, "Setup state"), (WanStatus, "WAN status"),
+        (AppName, "Device application"), (ModelNumber, "Model"), (Serial, "Serial"), (WanMac, "WAN MAC"), (DeviceMode, "Device mode"), (ObaState, "Setup state"), (WanStatus, "WAN status"),
+        (DownloadProgress, "Download progress"),
         ("0000aa09-0000-1000-8000-00805f9b34fb", "Firmware 1"), ("0000aa0a-0000-1000-8000-00805f9b34fb", "Firmware 2"),
         ("0000aa0b-0000-1000-8000-00805f9b34fb", "Firmware 3"), ("0000aa0c-0000-1000-8000-00805f9b34fb", "Firmware 4"),
         ("0000aa13-0000-1000-8000-00805f9b34fb", "Upgrade status"),
