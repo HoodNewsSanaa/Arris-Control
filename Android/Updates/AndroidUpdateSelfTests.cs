@@ -12,6 +12,13 @@ internal static class AndroidUpdateSelfTests
         var expected = AndroidUpdater.InstalledVersion(context) + 1;
         var candidate = AndroidUpdater.ApkPath(context);
         AndroidUpdater.ValidateApk(context, candidate, expected);
+        var temporary = Path.Combine(AndroidUpdater.Folder(context), "download.part.apk");
+        try
+        {
+            File.Copy(candidate, temporary, true);
+            AndroidUpdater.ValidateApk(context, temporary, expected);
+        }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
         var refused = false;
         try { AndroidUpdater.ValidateApk(context, Path.Combine(AndroidUpdater.Folder(context), "foreign.apk"), expected); }
         catch (RouterException ex) when (ex.Message.Contains("different signing key", StringComparison.Ordinal)) { refused = true; }

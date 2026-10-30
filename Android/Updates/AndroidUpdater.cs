@@ -86,7 +86,7 @@ internal static class AndroidUpdater
     {
         var transport = new AndroidUpdateTransport(context);
         var checksum = UpdateProtocol.ParseChecksum(await transport.TextAsync(release.ChecksumUrl, 4096, token), release);
-        Directory.CreateDirectory(Folder(context)); var temporary = ApkPath(context) + ".part";
+        Directory.CreateDirectory(Folder(context)); var temporary = Path.Combine(Folder(context), "download.part.apk");
         try
         {
             await transport.DownloadAsync(release.ApkUrl, temporary, release.Size, progress, token);
@@ -102,7 +102,7 @@ internal static class AndroidUpdater
         using var archive = context.PackageManager!.GetPackageArchiveInfo(path, flags) ?? throw new RouterException("Android could not verify the downloaded APK.");
         using var installed = context.PackageManager.GetPackageInfo(context.PackageName!, flags)!;
         if (archive.PackageName != UpdateProtocol.Package || Code(archive) != expectedVersion || expectedVersion <= Code(installed))
-            throw new RouterException("The APK is not a newer Arris Control Android build.");
+            throw new RouterException($"The APK is not the expected newer Arris Control Android build (package {archive.PackageName}; downloaded {Code(archive)}, expected {expectedVersion}, installed {Code(installed)}).");
         if (archive.ApplicationInfo?.MinSdkVersion > (int)Build.VERSION.SdkInt) throw new RouterException("This update requires a newer Android version.");
         static string[] Signers(PackageInfo package)
         {
