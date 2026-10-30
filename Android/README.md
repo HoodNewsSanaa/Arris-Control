@@ -44,8 +44,9 @@ consistent tokens within that capture; unknown/secret fields are never read.
 
 **Stop and save capture** stays available during reads. Leaving the app also
 stops recording and closes the connection. A partial report is saved privately
-on the phone as each sample completes; **Open saved Bluetooth capture** is
-available under More options and Bluetooth inspection after relaunch. Copy/share
+on the phone as each sample completes; **Open saved Bluetooth captures** is
+available under More options and Bluetooth inspection after relaunch. Each recording
+has its own dated file, so later attempts retain the earlier baseline. Copy/share
 is user-started. This is an app read-only capture, not an HCI log of the official
 app or a capture/decryption of router WAN traffic. UPGRADING alone does not prove
 that firmware is downloading or that a cloud service is required.

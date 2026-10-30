@@ -3,7 +3,7 @@ Android 0.3.0 — onboarding capture and individual commands:
 - Record up to three minutes of read-only Bluetooth state with exact status bytes,
   UTC/elapsed timestamps, service properties and GATT rejection codes. Identities
   are masked; secret/unknown characteristics are not read. A partial report is
-  saved privately and can be reopened after relaunch.
+  saved privately in dated captures and can be reopened after relaunch.
 - A rejected serial read (including code 115) no longer blocks all other reads.
   Timeouts, cancellations and dropped connections still require reconnecting.
 - Add confirmed one-shot MAINAP/EXTENDER role selection and SETOBCOMPLETE controls
