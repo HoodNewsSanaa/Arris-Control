@@ -155,7 +155,7 @@ Wi-Fi/Ethernet networks at port 50011 (32 probes at a time, up to 1024 addresses
 large subnets are limited to the local /24). This sends TLS probes without credentials.
 Only a unique matching certificate is eligible for login. An authenticated exact
 serial and protected mode read are then required before selecting and saving the
-new address. Certificate CN matching is a consistency check, not public-PKI proof.
+new address. Only the pinned router key is accepted (see Router certificate pinning).
 
 A new encrypted profile version retains the existing encrypted payload; older
 profiles are preserved. No cloud fallback or router setting writes are used for
@@ -164,3 +164,26 @@ change; settings writes are never retried. Private IPv4 networks reachable throu
 connected Wi-Fi/Ethernet are supported. Other subnets, isolated clients, changing
 addresses during discovery, and unreachable management listeners may prevent it.
 Native live automatic reconnection still needs user validation.
+
+## Router certificate pinning
+
+The router's HTTPS certificate is self-signed, and its common name is simply the
+router MAC. Any device on the same network can read that name from the real router
+and put it in its own certificate, so a name check alone cannot tell the real router
+from an impostor. The app therefore pins the router's **public key**:
+
+- At the first successful local login (account acquisition or a manually entered
+  local credential), the app records the SHA-256 hash of the certificate's public
+  key. When you picked the address from a scan, the scanned key is required.
+- The pin is stored **inside** the encrypted credential (DPAPI on Windows, Android
+  Keystore on Android), never in the editable plaintext metadata. Changing
+  `RouterAddress` in a record cannot redirect a login.
+- Every later connection, address discovery probe and scan follow-up requires that
+  exact key. A different certificate fails TLS before any username or password is
+  sent.
+- Credentials saved before 0.4.0 / Android 0.2.0 have no pin. They connect only at
+  their saved (or entered) address, never by scanning, and are upgraded to a new
+  pinned version after the first successful login. The original record is kept.
+
+If a router's key genuinely changes (for example after a factory reset), its
+saved credential stops connecting; acquire the credential again.

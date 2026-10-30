@@ -131,15 +131,18 @@ internal static class CloudAcquisition
         }
         return result.DistinctBy(d=>(d.Serial,d.Mac)).ToList();
     }
-    public static async Task<CredentialRecord> VerifyAndSaveAsync(AcquiredCredential acquired,CloudDevice selected,string address,CancellationToken token=default)
+    /// <summary>First local verification. The certificate is pinned at this login (trust on first use);
+    /// pass <paramref name="expectedPin"/> when the address came from a scan so the same certificate is required.</summary>
+    public static async Task<CredentialRecord> VerifyAndSaveAsync(AcquiredCredential acquired,CloudDevice selected,string address,CancellationToken token=default,string? expectedPin=null)
     {
         if(!acquired.Devices.Contains(selected))throw new RouterException("Select a device returned by this account's inventory.");
-        var record=new CredentialRecord("",selected.Serial,selected.Mac,address);using var wire=new LocalWire(record);
+        var record=new CredentialRecord("",selected.Serial,selected.Mac,address);using var wire=new LocalWire(record,expectedPin);
         await wire.SendAsync("/loginAction",RouterClient.LoginBody(acquired.Credential.UserName,acquired.Credential.Password,"abcxyz123_windows_"+Guid.NewGuid().ToString("N"),DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()),token);
         var identity=await wire.SendAsync("/getData?key=DEVICE_INFO_ALL",null,token);
         if(Catalog.Text(identity["DEVICE_INFO"]?["SERIAL_KEY"])!=selected.Serial)throw new RouterException("The local serial does not match the selected account device. No credential was saved.");
         var mode=await wire.SendAsync("/getData?key=DEVICEOPERMODE_ALL",null,token);
         if(Catalog.Text(mode["DEVICEOPERMODE"]?["MODE"]) is not ("DUAL" or "IPV4ONLY" or "BRIDGE"))throw new RouterException("No recognized protected mode was returned. No credential was saved.");
-        return CredentialStore.SaveVerified(acquired.Credential,selected,address);
+        var pin=wire.ObservedPin??throw new RouterException("The router certificate could not be recorded. No credential was saved.");
+        return CredentialStore.SaveVerified(acquired.Credential,selected,address,pin);
     }
 }
