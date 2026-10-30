@@ -109,6 +109,28 @@ internal static class CloudProtocol
         catch(CryptographicException){throw new RouterException("This device could not protect the protocol reference. No plaintext fallback is used.");}
         finally{CryptographicOperations.ZeroMemory(plain);if(check is not null)CryptographicOperations.ZeroMemory(check);}
     }
+    // Personal builds may embed the reference as this resource (from a gitignored
+    // Android/protocol.local.json). Public/CI builds never contain it.
+    public const string EmbeddedResourceName="ArrisControl.protocol.local.json";
+    public static string ToJson(CloudConfiguration configuration)
+    {
+        configuration.Validate();
+        return JsonSerializer.Serialize(new Dictionary<string,string>{[Names[0]]=configuration.Pool,[Names[1]]=configuration.ClientId,
+            [Names[2]]=configuration.ClientSecret,[Names[3]]=configuration.AccountBase},new JsonSerializerOptions{WriteIndented=true});
+    }
+    public static CloudConfiguration FromJson(string json)
+    {
+        Dictionary<string,string>? values;
+        try{values=JsonSerializer.Deserialize<Dictionary<string,string>>(json);}
+        catch(JsonException){throw new RouterException("The bundled SURFboard reference is not valid JSON.");}
+        return FromConstants(values??throw new RouterException("The bundled SURFboard reference is empty."));
+    }
+    public static CloudConfiguration? LoadEmbedded()
+    {
+        using var stream=typeof(CloudProtocol).Assembly.GetManifestResourceStream(EmbeddedResourceName);
+        if(stream is null)return null;
+        using var reader=new StreamReader(stream);return FromJson(reader.ReadToEnd());
+    }
     public static CloudConfiguration? Discover()
     {
         var saved=LoadSaved();if(saved is not null)return saved;

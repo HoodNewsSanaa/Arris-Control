@@ -21,5 +21,7 @@
   <ItemGroup>
     <Compile Include="../Core.cs;../Settings.cs;../RouterDiscovery.cs;../CloudAcquisition.cs;../CloudProtocol.cs;../CognitoCrypto.cs;../AcquisitionStore.cs;../SelfTests.cs;../CloudSelfTests.cs;../DiscoverySelfTests.cs" Link="Shared/%(Filename)%(Extension)" />
     <EmbeddedResource Include="../srp-test-vector.json" />
+    <!-- Personal builds only: bundle a private SURFboard reference if present. Never committed (gitignored); CI fails if it exists. -->
+    <EmbeddedResource Include="protocol.local.json" Condition="Exists('$(MSBuildProjectDirectory)/protocol.local.json')" LogicalName="ArrisControl.protocol.local.json" />
   </ItemGroup>
 </Project>

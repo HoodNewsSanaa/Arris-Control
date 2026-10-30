@@ -28,3 +28,6 @@ artifacts/
 local.properties
 __pycache__/
 *.pyc
+# Private SURFboard reference for personal builds; never commit.
+protocol.local.json
+Android/protocol.local.json

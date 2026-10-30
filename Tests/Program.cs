@@ -9,6 +9,15 @@ if (args is ["--probe", var address])
     return;
 }
 
+if (args is ["--export-protocol", var reference, var output])
+{
+    // For personal builds only: writes the SURFboard reference as plaintext JSON.
+    // Keep the output private; Android/protocol.local.json is gitignored and CI refuses to build with it.
+    File.WriteAllText(output, CloudProtocol.ToJson(CloudProtocol.ReadReference(reference)));
+    Console.WriteLine($"Wrote {output}. Keep this file private; never commit or share it.");
+    return;
+}
+
 await SelfTests.RunAsync();
 // Exercise authenticated envelope rejection independently of a router/cloud.
 var cipher = CredentialProtection.Protect([1, 2, 3], [4]);
