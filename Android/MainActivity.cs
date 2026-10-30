@@ -716,7 +716,7 @@ public sealed class MainActivity : Activity
             chipText: $"{ok}/{snapshot.Reads.Count} answered", chipColor: ok > 0 ? Palette.Success : Palette.Warning);
         Action(card, "Copy report", () =>
         {
-            var clipboard = (ClipboardManager)GetSystemService(ClipboardService)!;
+            var clipboard = (Android.Content.ClipboardManager)GetSystemService(ClipboardService)!;
             clipboard.PrimaryClip = ClipData.NewPlainText("Arris Control diagnostics", report);
             status.Text = "Diagnostics report copied. Paste it wherever you need it.";
             return Task.CompletedTask;
