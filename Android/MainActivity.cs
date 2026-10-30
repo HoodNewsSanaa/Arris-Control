@@ -607,7 +607,12 @@ public sealed class MainActivity : Activity
             var key = await BleReadText(MaxBle.EncryptionKey);
             if (string.IsNullOrEmpty(key)) throw new RouterException("Could not read the router's encryption key, so nothing was written.");
             var cipher = CloudAcquisition.EncryptForRouter(key, text);
-            await ble!.WriteAsync(uuid, System.Text.Encoding.UTF8.GetBytes(cipher), lifetime.Token);
+            try { await ble!.WriteAsync(uuid, System.Text.Encoding.UTF8.GetBytes(cipher), lifetime.Token); }
+            catch (RouterException ex)
+            {
+                var state = await BleReadText(MaxBle.ObaState);
+                throw new RouterException($"Writing {label} failed. {ex.Message} Setup state: {(state.Length > 0 ? state : "unknown")}. Nothing was changed on the router.");
+            }
             status.Text = label + " written.";
             await Message("Written", label + " was written to the router.");
         }
@@ -619,7 +624,8 @@ public sealed class MainActivity : Activity
         {
             if (!await Confirm("Finish setup?", "Send the onboarding-complete signal to the router? Do this only after the earlier writes succeeded.", "Finish"))
             { status.Text = "Setup not marked complete."; return; }
-            await ble!.WriteAsync(MaxBle.ObaComplete, System.Text.Encoding.UTF8.GetBytes("1"), lifetime.Token);
+            try { await ble!.WriteAsync(MaxBle.ObaComplete, System.Text.Encoding.UTF8.GetBytes("1"), lifetime.Token); }
+            catch (RouterException ex) { throw new RouterException("Marking setup complete failed. " + ex.Message); }
             status.Text = "Onboarding-complete signal sent.";
             await Message("Done", "The router was told setup is complete. Join its new Wi-Fi, then use ARRIS account sign-in to save a local credential.");
         }, Tone.Danger);
