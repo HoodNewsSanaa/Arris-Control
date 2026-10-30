@@ -71,6 +71,19 @@ internal static class OfflineSetupSelfTests
         await Reject(() => new BleSetupSession(unknownState, Draft, Wifi).WriteCredentialsAsync(default));
         Assert(unknownState.Writes.Count == 0, "Setup accepted an empty onboarding state.");
         Assert(BleSetupProtocol.DecodeMac(Encoding.UTF8.GetBytes("00:11:22:33:44:55\0")) == Device.Mac, "Bluetooth MAC text was not normalized.");
+        var factory = new FakeWire();
+        await BlePrimaryInitialization.InitializeAsync(factory, default);
+        Assert(factory.Writes.SequenceEqual(new[] { (BlePrimaryInitialization.Mode, "MAINAP") }), "Primary initialization sent an unexpected write.");
+        await Reject(() => BlePrimaryInitialization.InitializeAsync(factory, default));
+        Assert(factory.Writes.Count == 1, "Primary initialization repeated its role write.");
+        foreach (var blocked in new[] { new FakeWire { State = "Upgrading" }, new FakeWire { Upgrade = "InProcess" }, new FakeWire { AppName = "other-device" }, new FakeWire { State = "" } })
+        {
+            await Reject(() => BlePrimaryInitialization.InitializeAsync(blocked, default));
+            Assert(blocked.Writes.Count == 0, "Primary initialization ignored its device/mode/state preconditions.");
+        }
+        var uncertainRole = new FakeWire { FailWrite = 1 };
+        await Reject(() => BlePrimaryInitialization.InitializeAsync(uncertainRole, default));
+        Assert(uncertainRole.Writes.Count == 1, "An uncertain role write was retried.");
         var cancelled = new FakeWire();
         await Reject(() => new BleSetupSession(cancelled, Draft, Wifi).WriteCredentialsAsync(new CancellationToken(true)));
         Assert(cancelled.Writes.Count == 0, "Cancelled setup sent a write.");
@@ -107,16 +120,20 @@ internal static class OfflineSetupSelfTests
         public string? Missing;
         public string Serial = Device.Serial, Mac = Device.Mac;
         public string State = "Ready";
+        public string AppName = "maxrouter", Role = "OB", Upgrade = "LATEST";
         public bool CanWrite(string uuid) => uuid != Missing;
         public Task<byte[]> ReadAsync(string uuid, CancellationToken token)
         {
             token.ThrowIfCancellationRequested(); Reads.Add(uuid);
             return Task.FromResult(Encoding.UTF8.GetBytes(uuid == BleSetupProtocol.Serial ? Serial :
-                uuid == BleSetupProtocol.Mac ? Mac : uuid == BleSetupProtocol.State ? State : throw new InvalidOperationException("Unexpected setup read.")));
+                uuid == BleSetupProtocol.Mac ? Mac : uuid == BleSetupProtocol.State ? State :
+                uuid == BlePrimaryInitialization.AppName ? AppName : uuid == BlePrimaryInitialization.Mode ? Role :
+                uuid == BlePrimaryInitialization.Upgrade ? Upgrade : throw new InvalidOperationException("Unexpected setup read.")));
         }
         public Task WriteAsync(string uuid, byte[] value, CancellationToken token)
         {
             token.ThrowIfCancellationRequested(); Writes.Add((uuid, Encoding.UTF8.GetString(value)));
+            if (uuid == BlePrimaryInitialization.Mode) Role = Encoding.UTF8.GetString(value);
             if (Writes.Count == FailWrite) throw new RouterException("Fictional lost acknowledgement.");
             return Task.CompletedTask;
         }

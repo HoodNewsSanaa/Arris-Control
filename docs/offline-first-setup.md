@@ -101,8 +101,17 @@ download progress (aa12) separately. An onboarding UPGRADING string by itself
 does not establish what is downloading or whether an ARRIS server is required.
 The stock pairing flow reads the application name and device mode, and can assign
 MAINAP to a unit reporting OB before its later registration/identity steps.
-This role-assignment prerequisite is not implemented by the current experiment;
-its effect on the missing identity fields still needs hardware observation.
+When the device reports the expected maxrouter application and OB mode, and is
+not reporting an active upgrade, inspection offers a separately confirmed
+primary-router initialization. It rechecks those values, sends MAINAP once and
+reads the role back. A lost acknowledgement is reported as unconfirmed and is
+never retried. Credential/Wi-Fi writes still require complete identity afterward.
+Its effect on this unit's missing identity fields needs hardware observation.
+
+An explicit rejected read (including status 115 from the test unit) is shown on
+its field and does not prevent reading other diagnostic fields. Incomplete,
+timed-out or cancelled operations still require reconnection. Status 115's exact
+firmware-specific meaning is unconfirmed; it is not treated as successful data.
 
 The target is operation when ARRIS services are unavailable. A test with WAN
 Internet present and ARRIS destinations blocked distinguishes that from a

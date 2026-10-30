@@ -125,6 +125,38 @@ internal sealed class BleSetupSession(IBleSetupWire wire, OfflineSetupDraft draf
     }
 }
 
+// The vendor's pairing stage selects MAINAP when a fresh unit reports OB,
+// before its later identity/credential stage. This is a separate, explicit
+// one-write action; it never substitutes a Bluetooth MAC for the WAN identity.
+internal static class BlePrimaryInitialization
+{
+    public static readonly string AppName = BleSetupProtocol.Uuid(0xaa02), Mode = BleSetupProtocol.Uuid(0xaa07),
+        Upgrade = BleSetupProtocol.Uuid(0xaa13);
+    static string Text(byte[] bytes) => Encoding.UTF8.GetString(bytes).Trim('\0', ' ', '\r', '\n');
+    public static async Task InitializeAsync(IBleSetupWire wire, CancellationToken token)
+    {
+        if (!wire.CanWrite(Mode)) throw new RouterException("This device does not expose writable router-role selection.");
+        if (!Text(await wire.ReadAsync(AppName, token)).Equals("maxrouter", StringComparison.OrdinalIgnoreCase) ||
+            Text(await wire.ReadAsync(Mode, token)) != "OB")
+            throw new RouterException("Only an uninitialized mAX unit reporting OB can use this step. Nothing was written.");
+        var state = Text(await wire.ReadAsync(BleSetupProtocol.State, token));
+        var upgrade = Text(await wire.ReadAsync(Upgrade, token));
+        if (state.Length == 0 || BleSetupProtocol.IsUpgrading(state) || upgrade.Equals("InProcess", StringComparison.OrdinalIgnoreCase))
+            throw new RouterException("The reported upgrade/setup state is unavailable or busy. Refresh it before initialization. Nothing was written.");
+        token.ThrowIfCancellationRequested();
+        try
+        {
+            await wire.WriteAsync(Mode, "MAINAP"u8.ToArray(), token);
+            if (Text(await wire.ReadAsync(Mode, token)) != "MAINAP")
+                throw new RouterException("The primary-router role was not confirmed.");
+        }
+        catch
+        {
+            throw new RouterException("Primary initialization sent one role-selection write, but its result is unconfirmed. It may have applied. Reconnect and refresh; no write was retried.");
+        }
+    }
+}
+
 // Preserve the proposed local login BEFORE provisioning. It is pending until an
 // authenticated HTTPS login verifies the exact serial and pins the router key.
 // No Wi-Fi password, ARRIS password or cloud token is stored here.

@@ -51,3 +51,17 @@ GitHub CI tests protocol fixtures and real Android Keystore on an emulator. Live
 - Lock setup during the reported UPGRADING state and recheck state before each
   setup phase. Keep complete identity verification before all setup writes.
 
+# Android in-app updater
+
+- Updates at the top of the app checks for Android builds, downloads and verifies
+  the APK, and opens Android's installation confirmation without visiting GitHub.
+- Optional launch checks run at most every six hours. Downloads are user-started
+  and show size/progress; router control stays available without Internet.
+- APK checks reject wrong package/version, size/checksum changes and different
+  signing keys. Permanent signing is required for future public update releases.
+- Emulator verification checks a real in-place APK upgrade and retention of an
+  encrypted local login and Keystore key.
+- Explicit Bluetooth read rejections now leave the connection available for
+  further diagnostic reads. Added a confirmed one-shot primary initialization
+  for eligible OB-mode units; active upgrades remain locked.
+

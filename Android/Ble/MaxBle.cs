@@ -215,6 +215,7 @@ internal sealed class BleManager : Java.Lang.Object, IBleSetupWire
             BleLog.Add($"read  {MaxBle.Short(uuid)} ok: {BleLog.Describe(uuid, result)}");
             return result;
         }
+        catch (RouterException ex) when (ex.Code == "BLE_READ_REJECTED") { throw; }
         catch { operationFailed = true; throw; }
     }
 
@@ -224,7 +225,8 @@ internal sealed class BleManager : Java.Lang.Object, IBleSetupWire
     /// <summary>Writes an allowlisted fragment and waits for acknowledgement.</summary>
     public async Task WriteAsync(string uuid, byte[] value, CancellationToken token)
     {
-        if (!BleSetupProtocol.WriteUuids.Contains(uuid)) throw new RouterException("This Bluetooth write is outside the offline setup protocol.");
+        if (!BleSetupProtocol.WriteUuids.Contains(uuid) && uuid != BlePrimaryInitialization.Mode)
+            throw new RouterException("This Bluetooth write is outside the offline setup protocol.");
         if (gatt is null || bridge is null) throw new RouterException("Not connected over Bluetooth.");
         if (operationFailed) throw new RouterException("Reconnect Bluetooth after the previous incomplete operation.");
         var ch = Find(uuid);
@@ -330,7 +332,7 @@ internal sealed class BleManager : Java.Lang.Object, IBleSetupWire
             { BleLog.Add("ignored unrelated/late read callback: " + MaxBle.Short(uuid ?? "")); return; }
             expectedRead = null;
             if (status == GattStatus.Success) Read.Set(value.ToArray());
-            else { BleLog.Add($"read {MaxBle.Short(uuid!)} FAILED code {(int)status} ({Explain((int)status)})"); Read.Fail(new RouterException($"The read of {MaxBle.Short(uuid!)} failed: code {(int)status} ({Explain((int)status)}).")); }
+            else { BleLog.Add($"read {MaxBle.Short(uuid!)} FAILED code {(int)status} ({Explain((int)status)})"); Read.Fail(new RouterException($"The read of {MaxBle.Short(uuid!)} failed: code {(int)status} ({Explain((int)status)}).", "BLE_READ_REJECTED")); }
         }
         public override void OnCharacteristicWrite(BluetoothGatt? g, BluetoothGattCharacteristic? ch, GattStatus status)
         {

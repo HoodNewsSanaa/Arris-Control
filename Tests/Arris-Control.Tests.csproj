@@ -7,5 +7,6 @@
   <ItemGroup>
     <Compile Include="../Core.cs;../OfflineSetup.cs;../OfflineSetupSelfTests.cs;../Settings.cs;../RouterDiscovery.cs;../CloudAcquisition.cs;../CloudProtocol.cs;../CognitoCrypto.cs;../AcquisitionStore.cs;../SelfTests.cs;../CloudSelfTests.cs;../DiscoverySelfTests.cs" Link="Shared/%(Filename)%(Extension)" />
     <EmbeddedResource Include="../srp-test-vector.json" />
+    <Compile Include="../Android/Updates/UpdateProtocol.cs;../Android/Updates/UpdateProtocolSelfTests.cs" Link="AndroidUpdates/%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>
