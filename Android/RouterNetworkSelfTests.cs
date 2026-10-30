@@ -12,7 +12,8 @@ internal static class RouterNetworkSelfTests
         AndroidNetwork.UseLocal();
         var endpoints=await RouterDiscovery.DiscoverApisAsync([host],null,token);
         if(endpoints.Count!=1 || endpoints[0].Mac!=mac || endpoints[0].Status!="SessionTimeout" || !CertificatePin.IsValid(endpoints[0].Pin))
-            throw new InvalidOperationException("Anonymous ARRIS API discovery failed against the TLS fixture.");
+            throw new InvalidOperationException("Anonymous ARRIS API discovery failed against the TLS fixture: "+
+                (endpoints.Count==0?"no endpoint":string.Join("; ",endpoints.Select(e=>$"{e.Address} mac={e.Mac} status={e.Status} pinLength={e.Pin.Length} pinValid={CertificatePin.IsValid(e.Pin)}"))));
         var pin=endpoints[0].Pin;
         var directory=Path.Combine(Path.GetTempPath(),"router-network-test-"+Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
