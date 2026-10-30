@@ -114,15 +114,60 @@ internal sealed class BleManager : Java.Lang.Object
         lock (found) return found.Values.OrderByDescending(d => d.Rssi).ToList();
     }
 
+    /// <summary>Connects and maps services. Clears Android's cached service map first (as the vendor
+    /// app does) and retries the connection once on a connection-level failure. Writes are never retried.</summary>
     public async Task ConnectAsync(BluetoothDevice device, CancellationToken token)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try { await ConnectOnceAsync(device, token); return; }
+            catch (RouterException) when (attempt == 1 && !token.IsCancellationRequested)
+            {
+                Close();
+                await Task.Delay(TimeSpan.FromSeconds(1.5), token);
+            }
+        }
+    }
+    async Task ConnectOnceAsync(BluetoothDevice device, CancellationToken token)
     {
         bridge = new GattBridge();
         gatt = device.ConnectGatt(context, false, bridge, BluetoothTransports.Le)
             ?? throw new RouterException("Could not open a Bluetooth connection to the router.");
         await bridge.Connected.WaitAsync(TimeSpan.FromSeconds(20), token);
+        RefreshCache(gatt);
+        await Task.Delay(TimeSpan.FromMilliseconds(600), token);
         if (!gatt.DiscoverServices()) throw new RouterException("Could not read the router's Bluetooth services.");
         await bridge.ServicesDiscovered.WaitAsync(TimeSpan.FromSeconds(20), token);
     }
+    // Android caches each device's service map; after a router reset or state change the stale copy
+    // causes GATT_ERROR (133). BluetoothGatt.refresh() is hidden, so it is called by reflection, best effort.
+    static void RefreshCache(BluetoothGatt gatt)
+    {
+        try { using var method = gatt.Class.GetMethod("refresh"); method?.Invoke(gatt); }
+        catch (Java.Lang.Exception) { }
+        catch (InvalidOperationException) { }
+    }
+    void Close()
+    {
+        try { gatt?.Disconnect(); gatt?.Close(); } catch (Java.Lang.Exception) { }
+        gatt?.Dispose(); bridge?.Dispose(); gatt = null; bridge = null;
+    }
+    /// <summary>Human-readable meaning for common GATT status codes.</summary>
+    public static string Explain(int code) => code switch
+    {
+        0 => "success",
+        2 => "reading not permitted",
+        3 => "writing not permitted",
+        5 => "needs a paired (authenticated) link",
+        6 => "request not supported",
+        7 => "invalid offset",
+        8 => "insufficient authorization",
+        13 => "value has the wrong length",
+        15 => "needs an encrypted link",
+        133 => "GATT_ERROR: a connection-level failure (often a stale Bluetooth cache, the link dropping, or the router busy). Not a refusal of the value",
+        257 => "generic failure",
+        _ => "unrecognized code"
+    };
 
     BluetoothGattCharacteristic Find(string uuid)
     {
@@ -172,11 +217,7 @@ internal sealed class BleManager : Java.Lang.Object
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing)
-        {
-            try { gatt?.Disconnect(); gatt?.Close(); } catch (Java.Lang.Exception) { }
-            gatt?.Dispose(); bridge?.Dispose(); gatt = null; bridge = null;
-        }
+        if (disposing) Close();
         base.Dispose(disposing);
     }
 
@@ -203,7 +244,7 @@ internal sealed class BleManager : Java.Lang.Object
             if (newState == ProfileState.Connected && status == GattStatus.Success) Connected.Set();
             else if (newState == ProfileState.Disconnected)
             {
-                var error = new RouterException("The Bluetooth connection to the router dropped.");
+                var error = new RouterException($"The Bluetooth connection to the router dropped (code {(int)status}: {Explain((int)status)}).");
                 Connected.Fail(error); ServicesDiscovered.Fail(error); Read.Fail(error); Written.Fail(error);
             }
         }
@@ -216,13 +257,13 @@ internal sealed class BleManager : Java.Lang.Object
         public override void OnCharacteristicRead(BluetoothGatt? g, BluetoothGattCharacteristic? ch, GattStatus status)
         {
             if (status == GattStatus.Success) Read.Set(ch?.GetValue() ?? []);
-            else Read.Fail(new RouterException($"The router rejected the read of {MaxBle.Short(ch?.Uuid?.ToString() ?? "")}: {status} (code {(int)status})."));
+            else Read.Fail(new RouterException($"The read of {MaxBle.Short(ch?.Uuid?.ToString() ?? "")} failed: code {(int)status} ({Explain((int)status)})."));
         }
 #pragma warning restore CA1422
         public override void OnCharacteristicWrite(BluetoothGatt? g, BluetoothGattCharacteristic? ch, GattStatus status)
         {
             if (status == GattStatus.Success) Written.Set();
-            else Written.Fail(new RouterException($"The router rejected the write to {MaxBle.Short(ch?.Uuid?.ToString() ?? "")}: {status} (code {(int)status})."));
+            else Written.Fail(new RouterException($"The write to {MaxBle.Short(ch?.Uuid?.ToString() ?? "")} failed: code {(int)status} ({Explain((int)status)})."));
         }
     }
 
