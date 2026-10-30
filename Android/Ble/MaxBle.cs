@@ -37,6 +37,26 @@ internal static class MaxBle
 
     public static UUID Uuid(string s) => UUID.FromString(s)!;
 
+    // Characteristics whose contents diagnostics must never read: the write-encryption key,
+    // credential slots, router password and Wi-Fi passphrases. Their presence is still reported.
+    public static readonly HashSet<string> NeverRead = new(StringComparer.OrdinalIgnoreCase)
+    {
+        EncryptionKey, "0000aa18-0000-1000-8000-00805f9b34fb",
+        "0000ab1d-0000-1000-8000-00805f9b34fb", "0000ab1e-0000-1000-8000-00805f9b34fb", "0000ab1f-0000-1000-8000-00805f9b34fb", "0000ab20-0000-1000-8000-00805f9b34fb",
+        "0000ab05-0000-1000-8000-00805f9b34fb", "0000ab06-0000-1000-8000-00805f9b34fb", "0000ab07-0000-1000-8000-00805f9b34fb", "0000ab08-0000-1000-8000-00805f9b34fb",
+        "0000ab17-0000-1000-8000-00805f9b34fb", "0000ab18-0000-1000-8000-00805f9b34fb", "0000ab19-0000-1000-8000-00805f9b34fb", "0000ab1a-0000-1000-8000-00805f9b34fb",
+    };
+    // Identity/state characteristics that are safe to read for diagnostics (serial is redacted in the report).
+    public static readonly (string Uuid, string Label)[] SafeReads =
+    [
+        (ModelNumber, "Model"), (Serial, "Serial"), (DeviceMode, "Device mode"), (ObaState, "Setup state"), (WanStatus, "WAN status"),
+        ("0000aa09-0000-1000-8000-00805f9b34fb", "Firmware 1"), ("0000aa0a-0000-1000-8000-00805f9b34fb", "Firmware 2"),
+        ("0000aa0b-0000-1000-8000-00805f9b34fb", "Firmware 3"), ("0000aa0c-0000-1000-8000-00805f9b34fb", "Firmware 4"),
+        ("0000aa13-0000-1000-8000-00805f9b34fb", "Upgrade status"),
+    ];
+    public static string Short(string uuid) =>
+        uuid.Length == 36 && uuid.EndsWith("-0000-1000-8000-00805f9b34fb", StringComparison.OrdinalIgnoreCase) ? uuid[4..8].ToLowerInvariant() : uuid.ToLowerInvariant();
+
     public static bool Supported(Context context)
     {
         if (!context.PackageManager!.HasSystemFeature(PackageManager.FeatureBluetoothLe)) return false;
@@ -46,7 +66,7 @@ internal static class MaxBle
 }
 
 /// <summary>A single discovered router advertisement.</summary>
-internal sealed record BleDevice(string Name, string Address, int Rssi, BluetoothDevice Device)
+internal sealed record BleDevice(string Name, string Address, int Rssi, BluetoothDevice Device, string[]? ServiceUuids = null, int[]? ManufacturerIds = null)
 {
     public override string ToString() => $"{(string.IsNullOrEmpty(Name) ? "(unnamed)" : Name)}\n{Address} · {Rssi} dBm";
 }
@@ -81,7 +101,11 @@ internal sealed class BleManager : Java.Lang.Object
             var device = result.Device;
             if (device?.Address is null) return;
             var name = result.ScanRecord?.DeviceName ?? device.Name ?? "";
-            lock (found) found[device.Address] = new BleDevice(name, device.Address, result.Rssi, device);
+            var services = result.ScanRecord?.ServiceUuids?.Select(u => u.Uuid?.ToString() ?? "").Where(u => u.Length > 0).ToArray() ?? [];
+            var makers = new List<int>();
+            if (result.ScanRecord?.ManufacturerSpecificData is { } data)
+                for (var i = 0; i < data.Size(); i++) makers.Add(data.KeyAt(i));
+            lock (found) found[device.Address] = new BleDevice(name, device.Address, result.Rssi, device, services, makers.ToArray());
         });
         var settings = new ScanSettings.Builder()!.SetScanMode(Android.Bluetooth.LE.ScanMode.LowLatency)!.Build();
         scanner.StartScan(null, settings, callback);
@@ -111,9 +135,21 @@ internal sealed class BleManager : Java.Lang.Object
     }
 
     /// <summary>Reads a characteristic and returns its raw bytes (empty if the router returned none).</summary>
+    /// <summary>Every service and characteristic the connected device exposes, with its allowed operations.</summary>
+    public IReadOnlyList<(string Service, string Characteristic, string Properties)> Map()
+    {
+        var map = new List<(string, string, string)>();
+        foreach (var service in gatt?.Services ?? new List<BluetoothGattService>())
+            foreach (var ch in service.Characteristics ?? new List<BluetoothGattCharacteristic>())
+                map.Add((service.Uuid?.ToString() ?? "", ch.Uuid?.ToString() ?? "", ch.Properties.ToString()));
+        return map;
+    }
+    public bool Has(string uuid) => Map().Any(m => string.Equals(m.Characteristic, uuid, StringComparison.OrdinalIgnoreCase));
+
     public async Task<byte[]> ReadAsync(string uuid, CancellationToken token)
     {
         if (gatt is null || bridge is null) throw new RouterException("Not connected over Bluetooth.");
+        if (MaxBle.NeverRead.Contains(uuid) && uuid != MaxBle.EncryptionKey) throw new RouterException("This characteristic holds a secret and is never read.");
         var ch = Find(uuid);
         bridge.BeginRead();
         if (!gatt.ReadCharacteristic(ch)) throw new RouterException("The Bluetooth read request was rejected.");
