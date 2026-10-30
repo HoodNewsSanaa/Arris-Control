@@ -309,6 +309,7 @@ public sealed class MainActivity : Activity
             await Verify(device);
         });
         Action(advanced, "Set up a new router over Bluetooth", BleScanAndPick);
+        Action(advanced, "Setup and mesh diagnostics (read-only)", SetupDiagnostics);
         content.AddView(Label("Local control · credentials encrypted on this phone", 12, color: Palette.Muted));
     }
     async Task ScanRouters()
@@ -488,6 +489,90 @@ public sealed class MainActivity : Activity
         Action(next, "Guided setup (experimental)", () => BleGuidedSetup(serial, mac, model), Tone.Primary);
         Action(next, "Disconnect", () => { ble?.Dispose(); ble = null; ShowConnect(); return Task.CompletedTask; });
         content.AddView(Label("Reading values over Bluetooth is safe. Setup writes are experimental and confirmed one at a time.", 12, color: Palette.Muted));
+    }
+
+    // Read-only survey of what nearby mAX units expose during setup/pairing. Never writes, and never
+    // reads secret characteristics (key, credential slots, passphrases); those are listed by presence only.
+    async Task SetupDiagnostics()
+    {
+        if (!await EnsureBlePermissions())
+            throw new RouterException("Bluetooth permission is needed for setup diagnostics. You can grant it in Android Settings → Apps → Arris Control.");
+        if (!MaxBle.Supported(this)) throw new RouterException("Turn on Bluetooth, then run setup diagnostics again.");
+        status.Text = "Surveying nearby Bluetooth devices for 10 seconds…";
+        ble?.Dispose(); ble = new BleManager(this);
+        var devices = await ble.ScanAsync(TimeSpan.FromSeconds(10), lifetime.Token);
+        static bool IsMax(BleDevice d) =>
+            (d.ServiceUuids ?? []).Any(u => u.Equals(MaxBle.ServiceOba, StringComparison.OrdinalIgnoreCase) || u.Equals(MaxBle.ServiceLca, StringComparison.OrdinalIgnoreCase)) ||
+            Regex.IsMatch(d.Name, "ARRIS|SURFboard|mAX|^W\\d{2,3}", RegexOptions.IgnoreCase);
+        var report = new System.Text.StringBuilder();
+        var version = PackageManager!.GetPackageInfo(PackageName!, 0)?.VersionName ?? "?";
+        report.AppendLine($"Arris Control setup diagnostics · Android {Build.VERSION.Release} · app {version} · {DateTime.Now:yyyy-MM-dd HH:mm}");
+        report.AppendLine("Read-only: nothing was written. Secret characteristics are listed but never read. MACs and non-ARRIS names are replaced.");
+        var candidates = devices.Where(IsMax).ToList();
+        report.AppendLine().AppendLine($"Bluetooth survey: {devices.Count} devices, {candidates.Count} look like mAX units");
+        foreach (var d in devices.OrderByDescending(IsMax).ThenByDescending(d => d.Rssi).Take(25))
+        {
+            var label = IsMax(d) ? (string.IsNullOrEmpty(d.Name) ? "(unnamed mAX)" : d.Name) : "<other device>";
+            var services = string.Join(",", (d.ServiceUuids ?? []).Select(MaxBle.Short));
+            var makers = string.Join(",", (d.ManufacturerIds ?? []).Select(m => "0x" + m.ToString("X4")));
+            report.AppendLine($"  {label} · {d.Rssi} dBm · services [{services}] · manufacturers [{makers}]");
+        }
+        if (candidates.Count > 0)
+        {
+            var labels = candidates.Select(d => (string.IsNullOrEmpty(d.Name) ? "(unnamed mAX)" : d.Name) + "\n" + d.Rssi + " dBm").Append("Skip mapping").ToArray();
+            var pick = await Choose("Map which unit's Bluetooth services?", labels);
+            if (pick >= 0 && pick < candidates.Count)
+            {
+                var target = candidates[pick];
+                status.Text = "Connecting to map Bluetooth services (read-only)…";
+                await ble.ConnectAsync(target.Device, lifetime.Token);
+                var map = ble.Map();
+                report.AppendLine().AppendLine($"Service map for {(string.IsNullOrEmpty(target.Name) ? "(unnamed mAX)" : target.Name)}: {map.Count} characteristics");
+                foreach (var group in map.GroupBy(m => m.Service))
+                {
+                    report.AppendLine($"  service {MaxBle.Short(group.Key)}");
+                    foreach (var m in group)
+                        report.AppendLine($"    {MaxBle.Short(m.Characteristic)} · {m.Properties}{(MaxBle.NeverRead.Contains(m.Characteristic) ? " · secret, not read" : "")}");
+                }
+                report.AppendLine().AppendLine("Safe values:");
+                foreach (var (uuid, label) in MaxBle.SafeReads)
+                {
+                    if (!ble.Has(uuid)) { report.AppendLine($"  {label}: (not exposed)"); continue; }
+                    var value = await BleReadText(uuid);
+                    var shown = uuid == MaxBle.Serial ? (value.Length == 0 ? "(empty)" : $"<serial, {value.Length} chars>") : Diagnostics.Value(label.Replace(" ", "_").ToUpperInvariant(), value);
+                    report.AppendLine($"  {label}: {shown}");
+                }
+                ble.Dispose(); ble = null;
+            }
+        }
+        report.AppendLine().AppendLine("Please also note (type these when you paste):");
+        report.AppendLine("  1. Wi-Fi networks the phone sees named like SURFBoard-Onboarding (open or secured?)");
+        report.AppendLine("  2. Light colour/pattern on each unit, and whether the satellite is wired to the main router");
+        report.AppendLine("  3. If you also tried the official app with ARRIS servers blocked: the last step it reached and any error");
+        report.AppendLine("  4. From the main router, run Diagnostics (section list) and paste that report too");
+        ShowReport("Setup diagnostics", "Read-only survey of what nearby mAX units expose for setup and pairing.", report.ToString());
+    }
+
+    void ShowReport(string title, string description, string report)
+    {
+        Shell(title);
+        var card = Card("Report", description, chipText: "Read-only", chipColor: Palette.Success);
+        Action(card, "Copy report", () =>
+        {
+            var clipboard = (Android.Content.ClipboardManager)GetSystemService(ClipboardService)!;
+            clipboard.PrimaryClip = ClipData.NewPlainText(title, report);
+            status.Text = "Report copied. Paste it wherever you need it."; return Task.CompletedTask;
+        }, Tone.Primary);
+        Action(card, "Share report", () =>
+        {
+            var send = new Intent(Intent.ActionSend); send.SetType("text/plain"); send.PutExtra(Intent.ExtraText, report);
+            StartActivity(Intent.CreateChooser(send, "Share " + title.ToLowerInvariant())); return Task.CompletedTask;
+        });
+        Action(card, "Back", () => { ble?.Dispose(); ble = null; ShowConnect(); return Task.CompletedTask; });
+        var text = Label(report, 11, color: Palette.Text);
+        text.SetTypeface(Android.Graphics.Typeface.Monospace, Android.Graphics.TypefaceStyle.Normal); text.SetTextIsSelectable(true);
+        card.AddView(text);
+        status.Text = title + " finished.";
     }
 
     async Task<string> BleReadText(string uuid)
