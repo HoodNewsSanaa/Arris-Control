@@ -32,7 +32,7 @@ internal static class OfflineSetupSelfTests
         Assert(wire.Writes.Count == expected.Length, "Unexpected provisioning write count.");
         for (var i = 0; i < expected.Length; i++)
             Assert(wire.Writes[i] == (BleSetupProtocol.Uuid(expected[i].Id), expected[i].Value), $"Wrong setup bytes/order at write {i}.");
-        Assert(wire.Reads.SequenceEqual(Enumerable.Repeat(new[] { BleSetupProtocol.Serial, BleSetupProtocol.Mac }, 3).SelectMany(x => x)),
+        Assert(wire.Reads.SequenceEqual(Enumerable.Repeat(new[] { BleSetupProtocol.Serial, BleSetupProtocol.Mac, BleSetupProtocol.State }, 3).SelectMany(x => x)),
             "Setup read something other than the expected identity.");
         await Reject(() => session.CompleteAsync(default));
         Assert(wire.Writes.Count == expected.Length, "Setup-complete was repeated.");
@@ -59,6 +59,18 @@ internal static class OfflineSetupSelfTests
         await changedSession.WriteCredentialsAsync(default); changed.Mac = "AABBCCDDEEFF";
         await Reject(() => changedSession.WriteWifiAsync(default));
         Assert(changed.Writes.Count == 10, "Setup failed to recheck identity between phases.");
+        var updating = new FakeWire { State = "Upgrading" };
+        await Reject(() => new BleSetupSession(updating, Draft, Wifi).WriteCredentialsAsync(default));
+        Assert(updating.Writes.Count == 0, "Setup wrote while the router reported an upgrade.");
+        Assert(!BleSetupProtocol.IsUpgrading("Upgrade complete"), "A completed upgrade was treated as active.");
+        var updateBetween = new FakeWire(); var updateSession = new BleSetupSession(updateBetween, Draft, Wifi);
+        await updateSession.WriteCredentialsAsync(default); updateBetween.State = "UPGRADING";
+        await Reject(() => updateSession.WriteWifiAsync(default));
+        Assert(updateBetween.Writes.Count == 10, "Upgrade state was not rechecked between phases.");
+        var unknownState = new FakeWire { State = "" };
+        await Reject(() => new BleSetupSession(unknownState, Draft, Wifi).WriteCredentialsAsync(default));
+        Assert(unknownState.Writes.Count == 0, "Setup accepted an empty onboarding state.");
+        Assert(BleSetupProtocol.DecodeMac(Encoding.UTF8.GetBytes("00:11:22:33:44:55\0")) == Device.Mac, "Bluetooth MAC text was not normalized.");
         var cancelled = new FakeWire();
         await Reject(() => new BleSetupSession(cancelled, Draft, Wifi).WriteCredentialsAsync(new CancellationToken(true)));
         Assert(cancelled.Writes.Count == 0, "Cancelled setup sent a write.");
@@ -94,12 +106,13 @@ internal static class OfflineSetupSelfTests
         public int FailWrite;
         public string? Missing;
         public string Serial = Device.Serial, Mac = Device.Mac;
+        public string State = "Ready";
         public bool CanWrite(string uuid) => uuid != Missing;
         public Task<byte[]> ReadAsync(string uuid, CancellationToken token)
         {
             token.ThrowIfCancellationRequested(); Reads.Add(uuid);
             return Task.FromResult(Encoding.UTF8.GetBytes(uuid == BleSetupProtocol.Serial ? Serial :
-                uuid == BleSetupProtocol.Mac ? Mac : throw new InvalidOperationException("Unexpected setup read.")));
+                uuid == BleSetupProtocol.Mac ? Mac : uuid == BleSetupProtocol.State ? State : throw new InvalidOperationException("Unexpected setup read.")));
         }
         public Task WriteAsync(string uuid, byte[] value, CancellationToken token)
         {

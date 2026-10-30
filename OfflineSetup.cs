@@ -27,15 +27,21 @@ internal static class BleSetupProtocol
 {
     public static string Uuid(int id) => $"0000{id:x4}-0000-1000-8000-00805f9b34fb";
     public static readonly string Serial = Uuid(0xaa04), Mac = Uuid(0xaa05), Selector = Uuid(0xab1c), Complete = Uuid(0xaa1a);
+    public static readonly string State = Uuid(0xaa08);
     public const string CompleteValue = "SETOBCOMPLETE";
     public static readonly HashSet<string> WriteUuids = new(
         Enumerable.Range(0xab01, 8).Concat(Enumerable.Range(0xab1d, 4)).Concat([0xab1c, 0xaa1a]).Select(Uuid), StringComparer.OrdinalIgnoreCase);
 
     public static string NormalizeMac(string value) => Regex.Replace(value.Trim().ToUpperInvariant(), "[:-]", "");
+    public static string DecodeMac(byte[] value) =>
+        NormalizeMac(Encoding.UTF8.GetString(value).Trim('\0', ' ', '\r', '\n', '\t'));
+    public static bool IsUpgrading(string state) => state.Trim().Equals("UPGRADING", StringComparison.OrdinalIgnoreCase);
     public static void ValidateIdentity(CloudDevice device)
     {
-        if (!Regex.IsMatch(device.Serial, "^[A-Z0-9]{12,24}$") || !Regex.IsMatch(device.Mac, "^[A-F0-9]{12}$"))
-            throw new RouterException("A complete router serial and WAN MAC must be read before offline setup.");
+        if (!Regex.IsMatch(device.Serial, "^[A-Z0-9]{12,24}$"))
+            throw new RouterException($"The router serial is missing or invalid ({device.Serial.Length} characters received). Reconnect and refresh identity; check its read result on the Bluetooth screen.");
+        if (!Regex.IsMatch(device.Mac, "^[A-F0-9]{12}$"))
+            throw new RouterException($"The WAN MAC is missing or invalid ({device.Mac.Length} characters received). Reconnect and refresh identity; check its read result on the Bluetooth screen.");
     }
     public static void Validate(OfflineSetupDraft draft, string wifiPassword)
     {
@@ -93,10 +99,13 @@ internal sealed class BleSetupSession(IBleSetupWire wire, OfflineSetupDraft draf
             if (BleSetupProtocol.WriteUuids.Any(uuid => !wire.CanWrite(uuid)))
                 throw new RouterException("The router does not expose the complete writable mAX setup interface. Nothing was written in this step.");
             token.ThrowIfCancellationRequested();
-            var serial = Encoding.UTF8.GetString(await wire.ReadAsync(BleSetupProtocol.Serial, token)).Trim('\0', ' ', '\r', '\n');
-            var mac = BleSetupProtocol.NormalizeMac(Encoding.UTF8.GetString(await wire.ReadAsync(BleSetupProtocol.Mac, token)).Trim('\0', ' ', '\r', '\n'));
+            var serial = Encoding.UTF8.GetString(await wire.ReadAsync(BleSetupProtocol.Serial, token)).Trim('\0', ' ', '\r', '\n').ToUpperInvariant();
+            var mac = BleSetupProtocol.DecodeMac(await wire.ReadAsync(BleSetupProtocol.Mac, token));
             if (serial != draft.Device.Serial || mac != draft.Device.Mac)
                 throw new RouterException("The connected router identity changed. Nothing was written in this step.");
+            var state = Encoding.UTF8.GetString(await wire.ReadAsync(BleSetupProtocol.State, token)).Trim('\0', ' ', '\r', '\n');
+            if (state.Length == 0) throw new RouterException("The router did not return its onboarding state. Refresh its state before setup. Nothing was written in this step.");
+            if (BleSetupProtocol.IsUpgrading(state)) throw new RouterException("The router reports an upgrade in progress. Leave it powered and refresh after it finishes. Nothing was written in this step.");
             foreach (var write in writes)
             {
                 token.ThrowIfCancellationRequested();

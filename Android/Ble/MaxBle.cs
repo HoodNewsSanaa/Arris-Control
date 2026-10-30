@@ -81,6 +81,7 @@ internal sealed class BleManager : Java.Lang.Object, IBleSetupWire
     readonly BluetoothAdapter adapter;
     BluetoothGatt? gatt;
     GattBridge? bridge;
+    bool operationFailed;
 
     public BleManager(Context context)
     {
@@ -130,8 +131,9 @@ internal sealed class BleManager : Java.Lang.Object, IBleSetupWire
     }
     async Task ConnectOnceAsync(BluetoothDevice device, CancellationToken token)
     {
-        BleLog.Add($"connect: {device.Address} (transport LE)");
+        BleLog.Add("connect: selected device (transport LE)");
         bridge = new GattBridge();
+        operationFailed = false;
         gatt = device.ConnectGatt(context, false, bridge, BluetoothTransports.Le)
             ?? throw new RouterException("Could not open a Bluetooth connection to the router.");
         await bridge.Connected.WaitAsync(TimeSpan.FromSeconds(20), token);
@@ -197,33 +199,40 @@ internal sealed class BleManager : Java.Lang.Object, IBleSetupWire
     public async Task<byte[]> ReadAsync(string uuid, CancellationToken token)
     {
         if (gatt is null || bridge is null) throw new RouterException("Not connected over Bluetooth.");
+        if (operationFailed) throw new RouterException("Reconnect Bluetooth after the previous incomplete operation, then refresh identity.");
         if (MaxBle.NeverRead.Contains(uuid)) throw new RouterException("This characteristic holds a secret and is never read.");
         var ch = Find(uuid);
-        bridge.BeginRead();
+        bridge.BeginRead(uuid);
         BleLog.Add($"read  {MaxBle.Short(uuid)} …");
-        if (!gatt.ReadCharacteristic(ch)) throw new RouterException("The Bluetooth read request was rejected.");
-        var result = await bridge.Read.WaitAsync(TimeSpan.FromSeconds(15), token) ?? [];
-        BleLog.Add($"read  {MaxBle.Short(uuid)} ok: {BleLog.Describe(uuid, result)}");
-        return result;
+        try
+        {
+            if (!gatt.ReadCharacteristic(ch)) throw new RouterException("Android rejected the Bluetooth read request. Reconnect and refresh identity.");
+            var result = await bridge.Read.WaitAsync(TimeSpan.FromSeconds(15), token) ?? [];
+            BleLog.Add($"read  {MaxBle.Short(uuid)} ok: {BleLog.Describe(uuid, result)}");
+            return result;
+        }
+        catch { operationFailed = true; throw; }
     }
 
     /// <summary>Setup requires acknowledged writes, not write-without-response.</summary>
-    public bool CanWrite(string uuid) => Has(uuid) && (Find(uuid).Properties & GattProperty.Write) != 0;
+    public bool CanWrite(string uuid) => !operationFailed && Has(uuid) && (Find(uuid).Properties & GattProperty.Write) != 0;
 
     /// <summary>Writes an allowlisted fragment and waits for acknowledgement.</summary>
     public async Task WriteAsync(string uuid, byte[] value, CancellationToken token)
     {
         if (!BleSetupProtocol.WriteUuids.Contains(uuid)) throw new RouterException("This Bluetooth write is outside the offline setup protocol.");
         if (gatt is null || bridge is null) throw new RouterException("Not connected over Bluetooth.");
+        if (operationFailed) throw new RouterException("Reconnect Bluetooth after the previous incomplete operation.");
         var ch = Find(uuid);
         ch.WriteType = GattWriteType.Default;
 #pragma warning disable CA1422
         ch.SetValue(value);
         BleLog.Add($"write {MaxBle.Short(uuid)} ({ch.Properties}): {BleLog.Describe(uuid, value)}");
-        bridge.BeginWrite();
+        bridge.BeginWrite(uuid);
         if (!gatt.WriteCharacteristic(ch)) throw new RouterException($"Android refused to send the write to {MaxBle.Short(uuid)} (characteristic allows: {ch.Properties}).");
 #pragma warning restore CA1422
-        await bridge.Written.WaitAsync(TimeSpan.FromSeconds(15), token);
+        try { await bridge.Written.WaitAsync(TimeSpan.FromSeconds(15), token); }
+        catch { operationFailed = true; throw; }
         BleLog.Add($"write {MaxBle.Short(uuid)} acknowledged");
     }
 
@@ -231,6 +240,41 @@ internal sealed class BleManager : Java.Lang.Object, IBleSetupWire
     {
         if (disposing) Close();
         base.Dispose(disposing);
+    }
+
+    // Explicit CI intent only: exercise Android's actual callback objects without
+    // requiring a physical Bluetooth adapter or sending any radio operation.
+    internal static async Task RunCallbackSelfTestsAsync(CancellationToken token)
+    {
+        using var callback = new GattBridge();
+        using var serial = new BluetoothGattCharacteristic(MaxBle.Uuid(MaxBle.Serial), GattProperty.Read, GattPermission.Read);
+        using var mac = new BluetoothGattCharacteristic(MaxBle.Uuid(MaxBle.WanMac), GattProperty.Read, GattPermission.Read);
+#pragma warning disable CA1422
+        serial.SetValue("stale-cache");
+#pragma warning restore CA1422
+        callback.BeginRead(MaxBle.Serial);
+        if (Build.VERSION.SdkInt >= BuildVersionCodes.Tiramisu)
+        {
+            callback.OnCharacteristicRead(null, mac, "wrong-field"u8.ToArray(), GattStatus.Success);
+            if (callback.Read.IsCompleted) throw new InvalidOperationException("An unrelated BLE read completed the identity request.");
+            callback.OnCharacteristicRead(null, serial, "TESTSERIAL123"u8.ToArray(), GattStatus.Success);
+            var value = await callback.Read.WaitAsync(TimeSpan.FromSeconds(1), token);
+            if (!value.SequenceEqual("TESTSERIAL123"u8.ToArray())) throw new InvalidOperationException("BLE read used the stale characteristic cache instead of the callback value.");
+        }
+        callback.BeginRead(MaxBle.Serial);
+#pragma warning disable CA1422
+        serial.SetValue("TESTSERIAL123");
+        callback.OnCharacteristicRead(null, serial, GattStatus.Success);
+#pragma warning restore CA1422
+        var legacy = await callback.Read.WaitAsync(TimeSpan.FromSeconds(1), token);
+        if (!legacy.SequenceEqual("TESTSERIAL123"u8.ToArray())) throw new InvalidOperationException("Legacy BLE read callback lost its value.");
+        callback.BeginWrite(MaxBle.P11Ssid);
+        callback.OnCharacteristicWrite(null, mac, GattStatus.Success);
+        if (callback.Written.IsCompleted) throw new InvalidOperationException("An unrelated BLE write acknowledgement was accepted.");
+        using var slot = new BluetoothGattCharacteristic(MaxBle.Uuid(MaxBle.P11Ssid), GattProperty.Write, GattPermission.Write);
+        callback.OnCharacteristicWrite(null, slot, GattStatus.Success);
+        await callback.Written.WaitAsync(TimeSpan.FromSeconds(1), token);
+        Console.WriteLine("PASS: modern/legacy Android BLE callback values and rejection of unrelated read/write callbacks.");
     }
 
     sealed class ScanBridge(Action<ScanResult> onResult) : ScanCallback
@@ -248,8 +292,9 @@ internal sealed class BleManager : Java.Lang.Object, IBleSetupWire
         public readonly Gate ServicesDiscovered = new();
         public readonly Gate<byte[]> Read = new();
         public readonly Gate Written = new();
-        public void BeginRead() => Read.Reset();
-        public void BeginWrite() => Written.Reset();
+        string? expectedRead, expectedWrite;
+        public void BeginRead(string uuid) { expectedRead = uuid; Read.Reset(); }
+        public void BeginWrite(string uuid) { expectedWrite = uuid; Written.Reset(); }
 
         public override void OnConnectionStateChange(BluetoothGatt? g, GattStatus status, ProfileState newState)
         {
@@ -268,13 +313,27 @@ internal sealed class BleManager : Java.Lang.Object, IBleSetupWire
         }
 #pragma warning disable CA1422
         public override void OnCharacteristicRead(BluetoothGatt? g, BluetoothGattCharacteristic? ch, GattStatus status)
-        {
-            if (status == GattStatus.Success) Read.Set(ch?.GetValue() ?? []);
-            else { BleLog.Add($"read {MaxBle.Short(ch?.Uuid?.ToString() ?? "")} FAILED code {(int)status} ({Explain((int)status)})"); Read.Fail(new RouterException($"The read of {MaxBle.Short(ch?.Uuid?.ToString() ?? "")} failed: code {(int)status} ({Explain((int)status)}).")); }
-        }
+            => CompleteRead(ch, ch?.GetValue() ?? [], status);
 #pragma warning restore CA1422
+        // Android 13+ supplies a snapshot of the value in this callback. Read
+        // that snapshot directly instead of depending on the mutable cache.
+        public override void OnCharacteristicRead(BluetoothGatt? g, BluetoothGattCharacteristic? ch, byte[]? value, GattStatus status)
+            => CompleteRead(ch, value ?? [], status);
+        void CompleteRead(BluetoothGattCharacteristic? ch, byte[] value, GattStatus status)
+        {
+            var uuid = ch?.Uuid?.ToString();
+            if (expectedRead is null || !string.Equals(uuid, expectedRead, StringComparison.OrdinalIgnoreCase))
+            { BleLog.Add("ignored unrelated/late read callback: " + MaxBle.Short(uuid ?? "")); return; }
+            expectedRead = null;
+            if (status == GattStatus.Success) Read.Set(value.ToArray());
+            else { BleLog.Add($"read {MaxBle.Short(uuid!)} FAILED code {(int)status} ({Explain((int)status)})"); Read.Fail(new RouterException($"The read of {MaxBle.Short(uuid!)} failed: code {(int)status} ({Explain((int)status)}).")); }
+        }
         public override void OnCharacteristicWrite(BluetoothGatt? g, BluetoothGattCharacteristic? ch, GattStatus status)
         {
+            var uuid = ch?.Uuid?.ToString();
+            if (expectedWrite is null || !string.Equals(uuid, expectedWrite, StringComparison.OrdinalIgnoreCase))
+            { BleLog.Add("ignored unrelated/late write callback: " + MaxBle.Short(uuid ?? "")); return; }
+            expectedWrite = null;
             if (status == GattStatus.Success) Written.Set();
             else { BleLog.Add($"write {MaxBle.Short(ch?.Uuid?.ToString() ?? "")} FAILED code {(int)status} ({Explain((int)status)})"); Written.Fail(new RouterException($"The write to {MaxBle.Short(ch?.Uuid?.ToString() ?? "")} failed: code {(int)status} ({Explain((int)status)}).")); }
         }
@@ -284,29 +343,33 @@ internal sealed class BleManager : Java.Lang.Object, IBleSetupWire
     internal sealed class Gate
     {
         TaskCompletionSource tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool IsCompleted => tcs.Task.IsCompleted;
         public void Reset() => tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public void Set() => tcs.TrySetResult();
         public void Fail(Exception ex) => tcs.TrySetException(ex);
         public async Task WaitAsync(TimeSpan timeout, CancellationToken token)
         {
+            var pending = tcs;
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(token);
             cts.CancelAfter(timeout);
-            using (cts.Token.Register(() => tcs.TrySetException(new RouterException("The Bluetooth operation timed out."))))
-                await tcs.Task;
+            using (cts.Token.Register(() => pending.TrySetException(new RouterException("The Bluetooth operation timed out."))))
+                await pending.Task;
         }
     }
     internal sealed class Gate<T>
     {
         TaskCompletionSource<T> tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool IsCompleted => tcs.Task.IsCompleted;
         public void Reset() => tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public void Set(T value) => tcs.TrySetResult(value);
         public void Fail(Exception ex) => tcs.TrySetException(ex);
         public async Task<T> WaitAsync(TimeSpan timeout, CancellationToken token)
         {
+            var pending = tcs;
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(token);
             cts.CancelAfter(timeout);
-            using (cts.Token.Register(() => tcs.TrySetException(new RouterException("The Bluetooth operation timed out."))))
-                return await tcs.Task;
+            using (cts.Token.Register(() => pending.TrySetException(new RouterException("The Bluetooth operation timed out."))))
+                return await pending.Task;
         }
     }
 }

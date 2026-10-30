@@ -27,7 +27,8 @@ internal static class BleLog
     // Describes a written/read value without revealing a secret one.
     public static string Describe(string uuid, byte[] value)
     {
-        if (MaxBle.NeverRead.Contains(uuid) || BleSetupProtocol.WriteUuids.Contains(uuid)) return $"{value.Length} bytes (secret, not shown)";
+        if (MaxBle.NeverRead.Contains(uuid) || BleSetupProtocol.WriteUuids.Contains(uuid) || uuid == MaxBle.Serial || uuid == MaxBle.WanMac)
+            return $"{value.Length} bytes (private value withheld)";
         var text = Encoding.UTF8.GetString(value);
         var printable = text.Length > 0 && text.All(c => !char.IsControl(c));
         return printable && text.Length <= 24 ? $"{value.Length} bytes \"{text}\"" : $"{value.Length} bytes";

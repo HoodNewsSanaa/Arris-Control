@@ -51,6 +51,7 @@ public sealed class MainActivity : Activity
             _ = Run(async () =>
             {
                 await Task.Run(() => SelfTests.RunAsync(), lifetime.Token);
+                await BleManager.RunCallbackSelfTestsAsync(lifetime.Token);
                 var fixture = CredentialProtection.Protect([1, 2, 3], [4]);
                 fixture[^1] ^= 1;
                 try { CredentialProtection.Unprotect(fixture, [4]); throw new InvalidOperationException("Tampered credential accepted."); }
@@ -509,21 +510,53 @@ public sealed class MainActivity : Activity
         status.Text = "Connecting over Bluetooth to " + (string.IsNullOrEmpty(device.Name) ? device.Address : device.Name) + "…";
         await ble!.ConnectAsync(device.Device, lifetime.Token);
 
-        string serial = await BleReadText(MaxBle.Serial), mac = await BleReadText(MaxBle.WanMac);
-        string model = await BleReadText(MaxBle.ModelNumber), mode = await BleReadText(MaxBle.DeviceMode);
-        string wan = await BleReadText(MaxBle.WanStatus), obaState = await BleReadText(MaxBle.ObaState);
+        // Keep failures visible. An absent value must not silently disappear from
+        // this page or turn into the generic setup validation error.
+        var errors = new Dictionary<string, string>();
+        async Task<string> ReadField(string uuid)
+        {
+            if (!ble.Has(uuid)) { errors[uuid] = "Not exposed by this device"; return ""; }
+            try
+            {
+                var bytes = await ble.ReadAsync(uuid, lifetime.Token);
+                var value = uuid == MaxBle.WanMac ? BleSetupProtocol.DecodeMac(bytes) :
+                    System.Text.Encoding.UTF8.GetString(bytes).Trim('\0', ' ', '\r', '\n', '\t');
+                if (value.Length == 0) errors[uuid] = "Empty response";
+                return value;
+            }
+            catch (RouterException ex) { errors[uuid] = ex.Message; return ""; }
+        }
+        string serial = await ReadField(MaxBle.Serial), mac = await ReadField(MaxBle.WanMac);
+        string model = await ReadField(MaxBle.ModelNumber), mode = await ReadField(MaxBle.DeviceMode);
+        string wan = await ReadField(MaxBle.WanStatus), obaState = await ReadField(MaxBle.ObaState);
 
         Shell("Router over Bluetooth"); backAction = BackToStart;
         var looksArris = serial.Length > 0 || model.Length > 0;
         var info = Card(string.IsNullOrEmpty(device.Name) ? "Connected device" : device.Name,
             chipText: looksArris ? "mAX" : "unknown", chipColor: looksArris ? Palette.Success : Palette.Muted);
-        void Row(string k, string v) { if (!string.IsNullOrEmpty(v)) info.AddView(Label(k + ":  " + v, 14)); }
-        Row("Model", model); Row("Serial", serial); Row("WAN MAC", mac);
-        Row("Routing mode", mode); Row("WAN status", wan); Row("Onboarding state", obaState);
+        void Row(string k, string uuid, string v) => info.AddView(Label(k + ":  " +
+            (v.Length > 0 ? v : errors.GetValueOrDefault(uuid, "Unavailable")), 14,
+            color: v.Length > 0 ? Palette.Text : Palette.Warning));
+        Row("Model", MaxBle.ModelNumber, model); Row("Serial", MaxBle.Serial, serial); Row("WAN MAC", MaxBle.WanMac, mac);
+        Row("Routing mode", MaxBle.DeviceMode, mode); Row("WAN status", MaxBle.WanStatus, wan); Row("Onboarding state", MaxBle.ObaState, obaState);
         if (!looksArris) info.AddView(Label("This device didn't return mAX identity values. It may not be an ARRIS router, or not in setup mode.", 13, color: Palette.Warning));
 
         var next = Card("What next");
-        Action(next, "Guided setup (experimental)", () => BleGuidedSetup(serial, mac, model), Tone.Primary);
+        var identityError = "";
+        try { BleSetupProtocol.ValidateIdentity(new(model, serial.Trim().ToUpperInvariant(), BleSetupProtocol.NormalizeMac(mac))); }
+        catch (RouterException ex) { identityError = ex.Message; }
+        if (BleSetupProtocol.IsUpgrading(obaState)) next.AddView(Label("The router reports an upgrade in progress. Setup writes are locked. Leave it powered and refresh the status after the upgrade finishes.", 14, color: Palette.Warning));
+        if (identityError.Length > 0) next.AddView(Label("Setup is waiting for identity reads. " + identityError, 14, color: Palette.Warning));
+        else if (obaState.Length == 0) next.AddView(Label("Setup is waiting for a readable onboarding state. Reconnect and refresh first.", 14, color: Palette.Warning));
+        else if (!BleSetupProtocol.IsUpgrading(obaState)) Action(next, "Guided setup (experimental)", () => BleGuidedSetup(serial, mac, model), Tone.Primary);
+        Action(next, "Reconnect and refresh identity / state", async () =>
+        {
+            ble?.Dispose(); ble = new BleManager(this); await BleConnectAndInspect(device);
+        });
+        Action(next, "Export Bluetooth activity log", () =>
+        {
+            ShowReport("Bluetooth activity log", "Read errors and status codes; identity and provisioning values are withheld.", BleLog.Export()); return Task.CompletedTask;
+        });
         Action(next, "Disconnect", () => { ble?.Dispose(); ble = null; ShowConnect(); return Task.CompletedTask; });
         content.AddView(Label("Inspection is read-only. Offline setup is experimental; each phase needs confirmation.", 12, color: Palette.Muted));
     }
@@ -615,7 +648,7 @@ public sealed class MainActivity : Activity
     async Task<string> BleReadText(string uuid)
     {
         try { var bytes = await ble!.ReadAsync(uuid, lifetime.Token); return System.Text.Encoding.UTF8.GetString(bytes).Trim('\0', ' ', '\r', '\n'); }
-        catch (RouterException) { return ""; }
+        catch (RouterException ex) { BleLog.Add($"read {MaxBle.Short(uuid)} unavailable: {ex.Message}"); return ""; }
     }
 
     Task BleGuidedSetup(string serial, string mac, string model)

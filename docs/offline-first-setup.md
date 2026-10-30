@@ -54,7 +54,8 @@ password is not saved. Pending records are available from the start screen
 after a process restart. They are not shown as verified saved routers.
 
 Each phase checks that the full writable interface exists and re-reads the
-serial and WAN MAC. All writes are sequential and acknowledged. Failed,
+serial, WAN MAC and onboarding state. A reported UPGRADING state locks writes.
+All writes are sequential and acknowledged. Failed,
 cancelled or uncertain writes permanently stop that session; there is no
 automatic retry or automatic resume. The UI closes the BLE connection after
 failure. No secret BLE characteristic is read, including the vendor key.
@@ -84,3 +85,13 @@ fragments, every one of the 19 lost-acknowledgement boundaries, identity changes
 cancellation, phase ordering, and encrypted pending-record round-trip/tamper
 rejection. CI runs these on desktop and inside the Android emulator. Physical
 Bluetooth and factory setup remain untested until a user tests a spare unit.
+
+If identity cannot be read, the Bluetooth inspection screen shows each field
+with its result, including empty replies, absent characteristics and GATT errors.
+Reconnect and refresh from that screen before attempting setup. Its activity log
+can be exported without entering setup; serial/MAC values are withheld.
+Android 13+ reads use the value supplied with the callback, and a callback for
+another characteristic cannot complete the pending read. An incomplete GATT
+operation requires a fresh connection. The characteristic IDs have been checked
+against the inspected 4.3.5 BLEAttributes enum; identifiers are never invented or
+replaced by the Bluetooth advertisement address.
