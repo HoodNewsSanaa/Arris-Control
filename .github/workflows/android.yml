@@ -110,3 +110,16 @@ jobs:
           --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA"
           --title "Arris Control Android preview ${{ github.run_number }}"
           --notes-file Android/RELEASE-NOTES.md --prerelease --latest=false
+      - name: Update the fixed android-latest download
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # One stable link for the newest tested APK. --latest=false keeps the Windows
+          # release as "Latest", so the Windows in-app updater is unaffected.
+          gh release delete android-latest --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || true
+          gh release create android-latest \
+            artifacts/Arris-Control-android.apk artifacts/SHA256SUMS-android.txt artifacts/Android-UI-preview.png \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Arris Control for Android (newest build)" \
+            --notes-file Android/RELEASE-NOTES.md --latest=false

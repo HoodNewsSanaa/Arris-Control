@@ -1,6 +1,6 @@
 # Arris Control for Android
 
-Install `Arris-Control-android.apk` from an **Android preview** on the repository's Releases page. Allow installation from your browser/file manager when Android prompts. Requires Android 8.0+ on ARM64; the APK also contains x86_64 for emulators. No root or separate .NET installation is needed.
+**[Download the newest APK](https://github.com/HoodNewsSanaa/Arris-Control/releases/download/android-latest/Arris-Control-android.apk)** ([release page](https://github.com/HoodNewsSanaa/Arris-Control/releases/tag/android-latest)). Allow installation from your browser/file manager when Android prompts. Requires Android 8.0+ on ARM64; the APK also contains x86_64 for emulators. No root or separate .NET installation is needed. Numbered `android-preview-N` releases keep earlier builds.
 
 ## Touchscreen interface
 
