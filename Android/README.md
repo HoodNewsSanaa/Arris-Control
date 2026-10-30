@@ -5,8 +5,8 @@ Install `Arris-Control-android.apk` from an **Android preview** on the repositor
 ## App updates
 
 Use **Updates** at the top of the app. Automatic checks run when the app opens;
-downloads and Android installation approval stay under your control. Once the
-permanent signing key is configured, updates preserve saved logins. Older
+downloads and Android installation approval stay under your control. Public
+releases use a permanent signing key and compatible updates preserve saved logins. Older
 disposable-key previews need one final reinstall. See [updater details](UPDATES.md).
 
 ## Touchscreen interface

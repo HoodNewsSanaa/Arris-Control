@@ -38,7 +38,7 @@ Android preview for ARRIS SURFboard mAX local management (Android 8.0+, ARM64 ph
 - Import an installed SURFboard Central reference or a local 4.3.5 APK/XAPK/BuildConfig.java for account sign-in. Vendor app secrets are not bundled. Existing local management credentials can also be entered directly.
 - Reviews each change, checks for stale values, sends once, and reads back. Lost replies are never retried automatically.
 
-This APK is a preview signed with the build runner's Android development key. It is installable but is not a production-signed Play Store release; a later build may require uninstalling this preview, which also removes its locally encrypted credentials.
+Public Android releases use the permanent signing key, so subsequent in-app updates preserve saved logins. Switching from an older disposable-key preview requires one final uninstall/reinstall, which removes that installation's encrypted credentials. Pull-request artifacts use test keys and are not published to the updater feed.
 
 GitHub CI tests protocol fixtures and real Android Keystore on an emulator. Live router operation and offline-WAN Wi-Fi behavior require physical-device testing. The APK does not change firmware or fix wireless association failures.
 # Offline first-time setup experiment
