@@ -77,68 +77,111 @@ public sealed class MainActivity : Activity
         lifetime.Dispose(); base.OnDestroy();
     }
     int Dp(int n) => (int)(n * Resources!.DisplayMetrics!.Density);
-    TextView Label(string text, int size = 15, bool heading = false)
+    // A calm dark palette with one azure accent and semantic status colors.
+    static class Palette
+    {
+        public static readonly Color Bg = Color.Rgb(0x0E, 0x10, 0x15);
+        public static readonly Color Surface = Color.Rgb(0x18, 0x1B, 0x22);
+        public static readonly Color SurfaceStroke = Color.Rgb(0x2C, 0x31, 0x3B);
+        public static readonly Color Text = Color.Rgb(0xF4, 0xF6, 0xF8);
+        public static readonly Color Muted = Color.Rgb(0x96, 0x9D, 0xAA);
+        public static readonly Color Accent = Color.Rgb(0x4C, 0x8D, 0xFF);
+        public static readonly Color OnAccent = Color.Rgb(0x08, 0x0B, 0x12);
+        public static readonly Color Success = Color.Rgb(0x37, 0xC9, 0x7F);
+        public static readonly Color Warning = Color.Rgb(0xE6, 0xA5, 0x4B);
+        public static readonly Color Danger = Color.Rgb(0xE8, 0x61, 0x5B);
+    }
+    enum Tone { Secondary, Primary, Danger }
+    TextView Label(string text, int size = 15, bool heading = false, Color? color = null)
     {
         var view = new TextView(this) { Text = text, TextSize = size };
-        view.SetTextColor(Color.White);
+        view.SetTextColor(color ?? (heading ? Palette.Text : size <= 13 ? Palette.Muted : Palette.Text));
         view.SetTypeface(Android.Graphics.Typeface.Create(heading ? "sans-serif-medium" : "sans-serif", Android.Graphics.TypefaceStyle.Normal), Android.Graphics.TypefaceStyle.Normal);
-        view.SetLineSpacing(Dp(2), 1.12f);
-        view.SetPadding(0, Dp(heading ? 4 : 3), 0, Dp(heading ? 12 : 8));
+        view.SetLineSpacing(Dp(2), 1.15f);
+        view.SetPadding(0, Dp(heading ? 4 : 3), 0, Dp(heading ? 10 : 7));
         return view;
     }
     LinearLayout Column() => new(this) { Orientation = Orientation.Vertical };
-    Android.Graphics.Drawables.GradientDrawable Surface(int stroke = 1)
+    Android.Graphics.Drawables.GradientDrawable Surface(int radius = 18, Color? fill = null, Color? stroke = null, int strokeWidth = 1)
     {
         var shape = new Android.Graphics.Drawables.GradientDrawable();
-        shape.SetColor(Color.Black); shape.SetCornerRadius(Dp(16));
-        shape.SetStroke(Dp(stroke), Color.Rgb(70,70,70)); return shape;
+        shape.SetColor(fill ?? Palette.Surface); shape.SetCornerRadius(Dp(radius));
+        shape.SetStroke(Dp(strokeWidth), stroke ?? Palette.SurfaceStroke); return shape;
     }
-    LinearLayout Card(string title, string? description = null, LinearLayout? parent = null)
+    // A small rounded status chip, e.g. "Connected" in green or "Offline" in muted.
+    TextView Chip(string text, Color color)
     {
-        var box = Column(); box.Background = Surface(); box.SetPadding(Dp(18), Dp(18), Dp(18), Dp(18));
-        var layout = new LinearLayout.LayoutParams(-1, -2); layout.BottomMargin = Dp(18);
+        var chip = new TextView(this) { Text = text, TextSize = 12 };
+        chip.SetTextColor(color); chip.SetTypeface(Android.Graphics.Typeface.Create("sans-serif-medium", Android.Graphics.TypefaceStyle.Normal), Android.Graphics.TypefaceStyle.Normal);
+        chip.SetPadding(Dp(12), Dp(6), Dp(12), Dp(6));
+        chip.Background = Surface(20, Color.Argb(28, color.R, color.G, color.B), Color.Argb(120, color.R, color.G, color.B));
+        return chip;
+    }
+    LinearLayout Card(string? title = null, string? description = null, LinearLayout? parent = null, string? chipText = null, Color? chipColor = null)
+    {
+        var box = Column(); box.Background = Surface(); box.SetPadding(Dp(18), Dp(16), Dp(18), Dp(18));
+        var layout = new LinearLayout.LayoutParams(-1, -2) { BottomMargin = Dp(14) };
         (parent ?? content).AddView(box, layout);
-        box.AddView(Label(title, 21, true));
-        if (!string.IsNullOrEmpty(description)) box.AddView(Label(description, 14));
+        if (title is not null)
+        {
+            if (chipText is not null)
+            {
+                var header = new LinearLayout(this) { Orientation = Orientation.Horizontal };
+                header.SetGravity(GravityFlags.CenterVertical);
+                var t = Label(title, 20, true); header.AddView(t, new LinearLayout.LayoutParams(0, -2, 1));
+                header.AddView(Chip(chipText, chipColor ?? Palette.Muted));
+                box.AddView(header);
+            }
+            else box.AddView(Label(title, 20, true));
+        }
+        if (!string.IsNullOrEmpty(description)) box.AddView(Label(description, 14, color: Palette.Muted));
         return box;
     }
     void Shell(string subtitle)
     {
         buttons.Clear();
-        root = Column(); root.SetBackgroundColor(Color.Black); root.FocusableInTouchMode = true; root.RequestFocus();
-        root.SetPadding(Dp(20), Dp(18), Dp(20), Dp(12));
-        var brand = Label("ARRIS / CONTROL", 11); brand.LetterSpacing = 0.18f; root.AddView(brand);
-        root.AddView(Label(subtitle, 32, true));
-        networkStatus = Label(AndroidNetwork.Status(), 12); root.AddView(networkStatus);
-        status = Label("", 13); status.SetTextColor(Color.White); root.AddView(status);
+        root = Column(); root.SetBackgroundColor(Palette.Bg); root.FocusableInTouchMode = true; root.RequestFocus();
+        root.SetPadding(Dp(20), Dp(20), Dp(20), Dp(10));
+        var brandRow = new LinearLayout(this) { Orientation = Orientation.Horizontal }; brandRow.SetGravity(GravityFlags.CenterVertical);
+        var dot = new TextView(this) { Text = "●", TextSize = 12 }; dot.SetTextColor(Palette.Accent); dot.SetPadding(0, 0, Dp(8), 0); brandRow.AddView(dot);
+        var brand = Label("ARRIS CONTROL", 11, color: Palette.Muted); brand.LetterSpacing = 0.22f; brandRow.AddView(brand);
+        root.AddView(brandRow);
+        var heading = Label(subtitle, 30, true); heading.SetPadding(0, Dp(2), 0, Dp(6)); root.AddView(heading);
+        networkStatus = Label(AndroidNetwork.Status(), 12, color: Palette.Muted); root.AddView(networkStatus);
+        status = Label("", 13, color: Palette.Muted); root.AddView(status);
         activityProgress = new ProgressBar(this, null, Android.Resource.Attribute.ProgressBarStyleHorizontal) { Indeterminate = true, Visibility = busy ? ViewStates.Visible : ViewStates.Gone };
-        activityProgress.IndeterminateTintList = Android.Content.Res.ColorStateList.ValueOf(Color.White);
-        root.AddView(activityProgress, new LinearLayout.LayoutParams(-1, Dp(2)));
+        activityProgress.IndeterminateTintList = Android.Content.Res.ColorStateList.ValueOf(Palette.Accent);
+        root.AddView(activityProgress, new LinearLayout.LayoutParams(-1, Dp(2)) { TopMargin = Dp(6), BottomMargin = Dp(2) });
         var scroll = new ScrollView(this) { FillViewport = true };
         scroll.SetClipToPadding(false);
-        content = Column(); content.SetPadding(0, Dp(8), 0, Dp(18)); scroll.AddView(content);
+        content = Column(); content.SetPadding(0, Dp(12), 0, Dp(18)); scroll.AddView(content);
         root.AddView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
-        var windowContent = new FrameLayout(this); windowContent.SetBackgroundColor(Color.Black); windowContent.SetFitsSystemWindows(true);
+        var windowContent = new FrameLayout(this); windowContent.SetBackgroundColor(Palette.Bg); windowContent.SetFitsSystemWindows(true);
         windowContent.AddView(root, new FrameLayout.LayoutParams(-1, -1)); SetContentView(windowContent);
     }
-    Button Action(LinearLayout parent, string text, Func<Task> action)
+    Button Action(LinearLayout parent, string text, Func<Task> action, Tone tone = Tone.Secondary)
     {
+        var fill = tone == Tone.Primary ? Palette.Accent : Palette.Surface;
+        var textColor = tone == Tone.Primary ? Palette.OnAccent : tone == Tone.Danger ? Palette.Danger : Palette.Text;
+        var stroke = tone == Tone.Primary ? Palette.Accent : tone == Tone.Danger ? Color.Argb(140, Palette.Danger.R, Palette.Danger.G, Palette.Danger.B) : Palette.SurfaceStroke;
         var button = new Button(this) { Text = text, TextSize = 16, Gravity = GravityFlags.Center };
-        button.SetAllCaps(false); button.SetTextColor(Color.White); button.Background = new Android.Graphics.Drawables.RippleDrawable(Android.Content.Res.ColorStateList.ValueOf(Color.Argb(45,255,255,255)), Surface(), null);
+        button.SetAllCaps(false); button.SetTextColor(textColor);
+        var ripple = tone == Tone.Primary ? Color.Argb(60, 255, 255, 255) : Color.Argb(40, 255, 255, 255);
+        button.Background = new Android.Graphics.Drawables.RippleDrawable(Android.Content.Res.ColorStateList.ValueOf(ripple), Surface(14, fill, stroke, tone == Tone.Primary ? 0 : 1), null);
         button.SetTypeface(Android.Graphics.Typeface.Create("sans-serif-medium", Android.Graphics.TypefaceStyle.Normal), Android.Graphics.TypefaceStyle.Normal);
-        button.SetPadding(Dp(16), Dp(8), Dp(16), Dp(8)); button.SetMinHeight(Dp(60));
+        button.SetPadding(Dp(16), Dp(10), Dp(16), Dp(10)); button.SetMinHeight(Dp(58)); button.StateListAnimator = null;
         if (Build.VERSION.SdkInt >= BuildVersionCodes.O) button.TooltipText = text.Replace("\n", " · ");
         button.Click += async (_, _) => { if (!busy) await Run(action); };
-        var layout = new LinearLayout.LayoutParams(-1, -2) { TopMargin = Dp(8), BottomMargin = Dp(4) };
+        var layout = new LinearLayout.LayoutParams(-1, -2) { TopMargin = Dp(8), BottomMargin = Dp(2) };
         buttons.Add(button); parent.AddView(button, layout); return button;
     }
     EditText Input(LinearLayout parent, string label, string text = "", bool secret = false)
     {
-        parent.AddView(Label(label, 13));
-        var field = new EditText(this) { Text = text, TextSize = 18,
+        parent.AddView(Label(label, 13, color: Palette.Muted));
+        var field = new EditText(this) { Text = text, TextSize = 17,
             InputType = secret ? InputTypes.ClassText | InputTypes.TextVariationPassword : InputTypes.ClassText | InputTypes.TextFlagNoSuggestions };
-        field.SetSingleLine(true); field.SetTextColor(Color.White); field.SetHintTextColor(Color.White);
-        field.Background = Surface(); field.SetPadding(Dp(16), Dp(14), Dp(16), Dp(14)); field.SetMinHeight(Dp(60));
+        field.SetSingleLine(true); field.SetTextColor(Palette.Text); field.SetHintTextColor(Palette.Muted);
+        field.Background = Surface(12, Color.Rgb(0x10, 0x12, 0x18)); field.SetPadding(Dp(16), Dp(14), Dp(16), Dp(14)); field.SetMinHeight(Dp(58));
         field.SetSelectAllOnFocus(true); field.SaveEnabled = false;
         if (Build.VERSION.SdkInt >= BuildVersionCodes.O) field.ImportantForAutofill = ImportantForAutofill.NoExcludeDescendants;
         var layout = new LinearLayout.LayoutParams(-1, -2) { BottomMargin = Dp(14) };
@@ -159,7 +202,7 @@ public sealed class MainActivity : Activity
             var view = (TextView)base.GetView(position, convertView, parent);
             var density = owner.Resources!.DisplayMetrics!.Density;
             view.SetMinHeight((int)(64 * density)); view.SetPadding((int)(24 * density), (int)(14 * density), (int)(24 * density), (int)(14 * density));
-            view.TextSize = 17; view.SetTextColor(Color.White); view.SetSingleLine(false); return view;
+            view.TextSize = 17; view.SetTextColor(MainActivity.Palette.Text); view.SetSingleLine(false); return view;
         }
     }
     async Task Run(Func<Task> action)
@@ -207,7 +250,7 @@ public sealed class MainActivity : Activity
         var records = CredentialStore.Find();
         var lastAddress = GetSharedPreferences("connection", FileCreationMode.Private)!.GetString("address", records.FirstOrDefault()?.Address ?? "192.168.7.1")!;
         address = Input(connection, "Router address", lastAddress);
-        Action(connection, "Scan for ARRIS routers", ScanRouters);
+        Action(connection, "Scan for ARRIS routers", ScanRouters, Tone.Primary);
         if (records.Count > 0)
         {
             var saved = Card("Saved routers", "Reconnect locally. No account sign-in or reference import needed.");
@@ -226,7 +269,7 @@ public sealed class MainActivity : Activity
             var intent = new Intent(Intent.ActionOpenDocument); intent.SetType("*/*"); intent.AddCategory(Intent.CategoryOpenable);
             StartActivityForResult(intent, ImportReference); return Task.CompletedTask;
         });
-        Action(account, "Sign in and find my routers", Acquire);
+        Action(account, "Sign in and find my routers", Acquire, Tone.Primary);
         Action(setup, "Use previously acquired credential", async () =>
         {
             if (!Directory.Exists(AcquisitionStore.Folder)) throw new RouterException("No account credential is saved on this installation yet.");
@@ -339,7 +382,7 @@ public sealed class MainActivity : Activity
         Shell("Select your Arris");
         address = Input(content, "Router IPv4 address", previousAddress);
         content.AddView(Label("Choose the exact unit. The app checks its certificate, serial number and protected routing mode before saving the local credential."));
-        foreach (var device in acquired!.Devices) Action(content, device.ToString(), () => Verify(device));
+        foreach (var device in acquired!.Devices) Action(content, device.ToString(), () => Verify(device), Tone.Primary);
         if (acquired.Devices.Count == 0) content.AddView(Label("The account returned no supported router identities. You can enter an existing local management credential from the connection screen."));
         Action(content, "Back to connections", () => { ShowConnect(); return Task.CompletedTask; });
     }
@@ -366,7 +409,7 @@ public sealed class MainActivity : Activity
     void ShowRouter()
     {
         Shell(currentPage.Name);
-        var navigation = Card("Connected locally", client!.Record.Address + " · " + client.Record.Serial);
+        var navigation = Card("Connected locally", client!.Record.Address + " · " + client.Record.Serial, chipText: "Connected", chipColor: Palette.Success);
         Action(navigation, "Change section  ⌄", async () =>
         {
             var selected = await Choose("Router settings", Catalog.Pages.Select(p => p.Name).ToArray());
@@ -375,7 +418,7 @@ public sealed class MainActivity : Activity
         });
         var bottom = new LinearLayout(this) { Orientation = Orientation.Horizontal };
         root.AddView(bottom);
-        var refresh = Action(bottom, "Refresh", async () => { if (await Discard()) { dirty = false; ShowRouter(); await Read(); } });
+        var refresh = Action(bottom, "Refresh", async () => { if (await Discard()) { dirty = false; ShowRouter(); await Read(); } }, Tone.Primary);
         refresh.LayoutParameters = new LinearLayout.LayoutParams(0, Dp(60), 1) { RightMargin = Dp(6) };
         var connections = Action(bottom, "Connections", async () => { if (await Discard()) { client?.Dispose(); client = null; AndroidNetwork.UseInternet(); ShowConnect(); } });
         connections.LayoutParameters = new LinearLayout.LayoutParams(0, Dp(60), 1) { LeftMargin = Dp(6) };
@@ -391,8 +434,8 @@ public sealed class MainActivity : Activity
             var bridge = Card("Bypass mode", value == "BRIDGE" ? "On · routing is handled by your main router." : "Off · this unit handles routing.");
             var definition = Settings.Definitions.Single(d => d.Container == "DEVICEOPERMODE");
             var section = new SettingSection(definition, "DEVICEOPERMODE", 0, "", Settings.Filter(definition, mode), "Bypass mode");
-            if (value is "DUAL" or "IPV4ONLY") Action(bridge, "Turn bypass ON", () => Save(section, new() { ["MODE"] = () => "BRIDGE" }));
-            if (value == "BRIDGE") Action(bridge, "Turn bypass OFF · restore router mode", () => Save(section, new() { ["MODE"] = () => "DUAL" }));
+            if (value is "DUAL" or "IPV4ONLY") Action(bridge, "Turn bypass ON", () => Save(section, new() { ["MODE"] = () => "BRIDGE" }), Tone.Danger);
+            if (value == "BRIDGE") Action(bridge, "Turn bypass OFF · restore router mode", () => Save(section, new() { ["MODE"] = () => "DUAL" }), Tone.Primary);
         }
         foreach (var section in Settings.Sections(snapshot)) Editor(section);
         foreach (var definition in Settings.Definitions.Where(d => d.Collection && snapshot.Data.ContainsKey(d.Key)))
@@ -422,7 +465,7 @@ public sealed class MainActivity : Activity
             {
                 var toggle = new Switch(this) { Text = field.Label, Checked = old == "1", TextSize = 15 };
                 toggle.SetPadding(0, Dp(10), 0, Dp(10)); toggle.CheckedChange += (_, _) => dirty = true;
-                toggle.SetMinHeight(Dp(60)); toggle.SetTextColor(Color.White); editor.AddView(toggle); getters[field.Key] = () => toggle.Checked ? "1" : "0";
+                toggle.SetMinHeight(Dp(60)); toggle.SetTextColor(Palette.Text); editor.AddView(toggle); getters[field.Key] = () => toggle.Checked ? "1" : "0";
             }
             else if (field.Kind == "choice")
             {
@@ -444,8 +487,8 @@ public sealed class MainActivity : Activity
                 if (field.Hint.Length > 0) editor.AddView(Label(field.Hint, 12));
             }
         }
-        Action(editor, adding ? "Review new rule" : "Review changes", () => Save(section, getters, adding ? "ADD" : "MODIFY"));
-        if (section.Definition.Collection && !adding) Action(editor, "Remove rule", () => Save(section, [], "DELETE"));
+        Action(editor, adding ? "Review new rule" : "Review changes", () => Save(section, getters, adding ? "ADD" : "MODIFY"), Tone.Primary);
+        if (section.Definition.Collection && !adding) Action(editor, "Remove rule", () => Save(section, [], "DELETE"), Tone.Danger);
     }
     async Task Save(SettingSection section, Dictionary<string, Func<string>> getters, string operation = "MODIFY")
     {
