@@ -14,7 +14,7 @@ namespace ArrisControl;
 
 [Activity(Label = "Arris Control", MainLauncher = true, Exported = true,
     ConfigurationChanges = ConfigChanges.Orientation | ConfigChanges.ScreenSize)]
-public sealed class MainActivity : Activity
+public sealed partial class MainActivity : Activity
 {
     LinearLayout root = null!, content = null!;
     TextView status = null!, networkStatus = null!;
@@ -68,6 +68,8 @@ public sealed class MainActivity : Activity
             {
                 await Task.Run(() => SelfTests.RunAsync(), lifetime.Token);
                 await BleManager.RunCallbackSelfTestsAsync(lifetime.Token);
+                await BleCaptureSelfTests.RunAsync();
+                await BleManualCommandSelfTests.RunAsync();
                 await UpdateProtocolSelfTests.RunAsync();
                 var fixture = CredentialProtection.Protect([1, 2, 3], [4]);
                 fixture[^1] ^= 1;
@@ -127,6 +129,7 @@ public sealed class MainActivity : Activity
     }
     protected override void OnDestroy()
     {
+        bleCaptureStop?.Cancel();
         updateDownload?.Cancel(); lifetime.Cancel(); client?.Dispose(); ble?.Dispose(); AndroidNetwork.UseInternet();
         lifetime.Dispose(); base.OnDestroy();
     }
@@ -439,6 +442,7 @@ public sealed class MainActivity : Activity
         });
         Action(advanced, "Set up a new router over Bluetooth", BleScanAndPick);
         Action(advanced, "Setup and mesh diagnostics (read-only)", SetupDiagnostics);
+        AddSavedBleCapture(advanced);
         content.AddView(Label("Local control · credentials encrypted on this phone", 12, color: Palette.Muted));
     }
     async Task ScanRouters()
@@ -642,7 +646,7 @@ public sealed class MainActivity : Activity
         var identityError = "";
         try { BleSetupProtocol.ValidateIdentity(new(model, serial.Trim().ToUpperInvariant(), BleSetupProtocol.NormalizeMac(mac))); }
         catch (RouterException ex) { identityError = ex.Message; }
-        if (BleSetupProtocol.IsUpgrading(obaState)) next.AddView(Label("The router reports an upgrade in progress. Setup writes are locked. Leave it powered and refresh the status after the upgrade finishes.", 14, color: Palette.Warning));
+        if (BleSetupProtocol.IsUpgrading(obaState)) next.AddView(Label("The onboarding state says UPGRADING. That alone does not confirm an active download. Record the state below to compare upgrade status and progress over time. Guided setup remains locked.", 14, color: Palette.Warning));
         if (identityError.Length > 0) next.AddView(Label("Setup is waiting for identity reads. " + identityError, 14, color: Palette.Warning));
         else if (obaState.Length == 0) next.AddView(Label("Setup is waiting for a readable onboarding state. Reconnect and refresh first.", 14, color: Palette.Warning));
         else if (!BleSetupProtocol.IsUpgrading(obaState)) Action(next, "Guided setup (experimental)", () => BleGuidedSetup(serial, mac, model), Tone.Primary);
@@ -664,11 +668,14 @@ public sealed class MainActivity : Activity
         {
             ble?.Dispose(); ble = new BleManager(this); await BleConnectAndInspect(device);
         });
+        Action(next, "Record state for 3 minutes (read-only)", () => CaptureBleState(device), Tone.Primary);
+        AddSavedBleCapture(next);
         Action(next, "Export Bluetooth activity log", () =>
         {
             ShowReport("Bluetooth activity log", "Read errors and status codes; identity and provisioning values are withheld.", BleLog.Export()); return Task.CompletedTask;
         });
         Action(next, "Disconnect", () => { ble?.Dispose(); ble = null; ShowConnect(); return Task.CompletedTask; });
+        AddManualBleCommands(device, appName, mode, serial, mac, obaState, upgrade);
         content.AddView(Label("Inspection is read-only. Offline setup is experimental; each phase needs confirmation.", 12, color: Palette.Muted));
     }
 

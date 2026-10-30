@@ -22,7 +22,7 @@ internal static class AndroidUpdateSelfTests
         using (var source = File.OpenRead(candidate))
             if (!SHA256.HashData(stream).SequenceEqual(SHA256.HashData(source))) throw new InvalidOperationException("The installation URI returned different APK bytes.");
         var traversalRefused = false;
-        try { using var invalid = context.ContentResolver.OpenInputStream(Android.Net.Uri.Parse("content://" + ApkUpdateProvider.Authority + "/other")); }
+        try { using var invalid = context.ContentResolver.OpenInputStream(Android.Net.Uri.Parse("content://" + ApkUpdateProvider.Authority + "/other")!); }
         catch (Exception) { traversalRefused = true; }
         if (!traversalRefused) throw new InvalidOperationException("The APK provider allowed a different file path.");
         var provider = context.PackageManager!.ResolveContentProvider(ApkUpdateProvider.Authority, 0)!;

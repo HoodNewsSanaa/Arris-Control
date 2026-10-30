@@ -64,7 +64,7 @@ internal sealed class AndroidUpdateTransport
                 }
                 progress?.Report(total); return;
             }
-            catch (Exception) when (token.IsCancellationRequested) { throw new OperationCanceledException(token); }
+            catch (Exception) when (token.IsCancellationRequested) { throw new System.OperationCanceledException(token); }
             finally { connection.Disconnect(); }
         }
         throw new RouterException("The update server redirected too many times.");
@@ -106,7 +106,7 @@ internal static class AndroidUpdater
         if (archive.ApplicationInfo?.MinSdkVersion > (int)Build.VERSION.SdkInt) throw new RouterException("This update requires a newer Android version.");
         static string[] Signers(PackageInfo package)
         {
-            var signatures = Build.VERSION.SdkInt >= BuildVersionCodes.P ? package.SigningInfo?.ApkContentsSigners : package.Signatures;
+            var signatures = Build.VERSION.SdkInt >= BuildVersionCodes.P ? package.SigningInfo?.GetApkContentsSigners() : package.Signatures;
             return signatures?.Select(x => Convert.ToHexString(SHA256.HashData(x.ToByteArray()!))).Order().ToArray() ?? [];
         }
         var actual = Signers(archive); var current = Signers(installed);

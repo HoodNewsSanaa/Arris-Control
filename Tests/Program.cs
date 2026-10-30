@@ -20,6 +20,8 @@ if (args is ["--export-protocol", var reference, var output])
 
 await SelfTests.RunAsync();
 await UpdateProtocolSelfTests.RunAsync();
+await BleCaptureSelfTests.RunAsync();
+await BleManualCommandSelfTests.RunAsync();
 // Exercise authenticated envelope rejection independently of a router/cloud.
 var cipher = CredentialProtection.Protect([1, 2, 3], [4]);
 cipher[^1] ^= 1;

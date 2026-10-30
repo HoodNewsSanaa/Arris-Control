@@ -202,6 +202,7 @@ internal sealed class BleManager : Java.Lang.Object, IBleSetupWire
 
     public async Task<byte[]> ReadAsync(string uuid, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
         if (gatt is null || bridge is null) throw new RouterException("Not connected over Bluetooth.");
         if (operationFailed) throw new RouterException("Reconnect Bluetooth after the previous incomplete operation, then refresh identity.");
         if (MaxBle.NeverRead.Contains(uuid)) throw new RouterException("This characteristic holds a secret and is never read.");
@@ -274,6 +275,15 @@ internal sealed class BleManager : Java.Lang.Object, IBleSetupWire
 #pragma warning restore CA1422
         var legacy = await callback.Read.WaitAsync(TimeSpan.FromSeconds(1), token);
         if (!legacy.SequenceEqual("TESTSERIAL123"u8.ToArray())) throw new InvalidOperationException("Legacy BLE read callback lost its value.");
+        callback.BeginRead(MaxBle.Serial);
+        callback.OnCharacteristicRead(null, serial, (GattStatus)115);
+        try { await callback.Read.WaitAsync(TimeSpan.FromSeconds(1), token); throw new InvalidOperationException("GATT 115 was accepted as a successful read."); }
+        catch (BleReadRejectedException ex) when (ex.Status == 115) { }
+        callback.BeginRead(MaxBle.WanMac);
+        mac.SetValue("001122334455");
+        callback.OnCharacteristicRead(null, mac, GattStatus.Success);
+        if (!(await callback.Read.WaitAsync(TimeSpan.FromSeconds(1), token)).SequenceEqual("001122334455"u8.ToArray()))
+            throw new InvalidOperationException("A rejected serial read prevented the following callback.");
         callback.BeginWrite(MaxBle.P11Ssid);
         callback.OnCharacteristicWrite(null, mac, GattStatus.Success);
         if (callback.Written.IsCompleted) throw new InvalidOperationException("An unrelated BLE write acknowledgement was accepted.");
@@ -332,7 +342,7 @@ internal sealed class BleManager : Java.Lang.Object, IBleSetupWire
             { BleLog.Add("ignored unrelated/late read callback: " + MaxBle.Short(uuid ?? "")); return; }
             expectedRead = null;
             if (status == GattStatus.Success) Read.Set(value.ToArray());
-            else { BleLog.Add($"read {MaxBle.Short(uuid!)} FAILED code {(int)status} ({Explain((int)status)})"); Read.Fail(new RouterException($"The read of {MaxBle.Short(uuid!)} failed: code {(int)status} ({Explain((int)status)}).", "BLE_READ_REJECTED")); }
+            else { BleLog.Add($"read {MaxBle.Short(uuid!)} FAILED code {(int)status} ({Explain((int)status)})"); Read.Fail(new BleReadRejectedException((int)status)); }
         }
         public override void OnCharacteristicWrite(BluetoothGatt? g, BluetoothGattCharacteristic? ch, GattStatus status)
         {
@@ -358,7 +368,11 @@ internal sealed class BleManager : Java.Lang.Object, IBleSetupWire
             var pending = tcs;
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(token);
             cts.CancelAfter(timeout);
-            using (cts.Token.Register(() => pending.TrySetException(new RouterException("The Bluetooth operation timed out."))))
+            using (cts.Token.Register(() =>
+            {
+                if (token.IsCancellationRequested) pending.TrySetCanceled(token);
+                else pending.TrySetException(new RouterException("The Bluetooth operation timed out."));
+            }))
                 await pending.Task;
         }
     }
@@ -374,7 +388,11 @@ internal sealed class BleManager : Java.Lang.Object, IBleSetupWire
             var pending = tcs;
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(token);
             cts.CancelAfter(timeout);
-            using (cts.Token.Register(() => pending.TrySetException(new RouterException("The Bluetooth operation timed out."))))
+            using (cts.Token.Register(() =>
+            {
+                if (token.IsCancellationRequested) pending.TrySetCanceled(token);
+                else pending.TrySetException(new RouterException("The Bluetooth operation timed out."));
+            }))
                 return await pending.Task;
         }
     }
