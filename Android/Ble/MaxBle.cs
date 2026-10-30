@@ -165,7 +165,7 @@ internal sealed class BleManager : Java.Lang.Object
 #pragma warning disable CA1422
         ch.SetValue(value);
         bridge.BeginWrite();
-        if (!gatt.WriteCharacteristic(ch)) throw new RouterException("The Bluetooth write request was rejected.");
+        if (!gatt.WriteCharacteristic(ch)) throw new RouterException($"Android refused to send the write to {MaxBle.Short(uuid)} (characteristic allows: {ch.Properties}).");
 #pragma warning restore CA1422
         await bridge.Written.WaitAsync(TimeSpan.FromSeconds(15), token);
     }
@@ -216,13 +216,13 @@ internal sealed class BleManager : Java.Lang.Object
         public override void OnCharacteristicRead(BluetoothGatt? g, BluetoothGattCharacteristic? ch, GattStatus status)
         {
             if (status == GattStatus.Success) Read.Set(ch?.GetValue() ?? []);
-            else Read.Fail(new RouterException("The router rejected the Bluetooth read."));
+            else Read.Fail(new RouterException($"The router rejected the read of {MaxBle.Short(ch?.Uuid?.ToString() ?? "")}: {status} (code {(int)status})."));
         }
 #pragma warning restore CA1422
         public override void OnCharacteristicWrite(BluetoothGatt? g, BluetoothGattCharacteristic? ch, GattStatus status)
         {
             if (status == GattStatus.Success) Written.Set();
-            else Written.Fail(new RouterException("The router rejected the Bluetooth write."));
+            else Written.Fail(new RouterException($"The router rejected the write to {MaxBle.Short(ch?.Uuid?.ToString() ?? "")}: {status} (code {(int)status})."));
         }
     }
 

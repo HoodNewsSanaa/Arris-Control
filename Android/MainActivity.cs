@@ -34,6 +34,8 @@ public sealed class MainActivity : Activity
     const int BlePermissions = 42;
     TaskCompletionSource<bool>? permissionResult;
     TaskCompletionSource<Android.Net.Uri?>? pickedReference;
+    // Where the system Back gesture/button goes from the current screen; null means leave the app.
+    Func<Task>? backAction;
     bool addressEdited;
 
     protected override void OnCreate(Bundle? state)
@@ -41,6 +43,8 @@ public sealed class MainActivity : Activity
         base.OnCreate(state);
         // Credentials/passwords never enter screenshots, recent-task thumbnails or backups.
         Window?.SetFlags(WindowManagerFlags.Secure, WindowManagerFlags.Secure);
+        if (Build.VERSION.SdkInt >= BuildVersionCodes.Tiramisu)
+            OnBackInvokedDispatcher.RegisterOnBackInvokedCallback(0, new BackCallback(this));
         ShowConnect();
         if (Intent?.GetBooleanExtra("offlineSelfTest", false) != true) TryAutoConnect();
         if (Intent?.GetBooleanExtra("offlineSelfTest", false) == true)
@@ -71,6 +75,32 @@ public sealed class MainActivity : Activity
                 }
                 else status.Text = "PASS: offline protocol and Android Keystore checks.";
             });
+    }
+#pragma warning disable CA1422, CS0672, CS0618
+    // Android 12 and earlier (and 13+ without predictive back) deliver Back here.
+    public override void OnBackPressed() => HandleBack(fromDispatcher: false);
+#pragma warning restore CA1422, CS0672, CS0618
+    void HandleBack(bool fromDispatcher)
+    {
+        if (busy) { status.Text = "Please wait for the current step to finish."; return; }
+        if (backAction is null)
+        {
+            // Start screen: leave the app the way the system would.
+#pragma warning disable CA1422, CS0618
+            if (fromDispatcher) MoveTaskToBack(true); else base.OnBackPressed();
+#pragma warning restore CA1422, CS0618
+            return;
+        }
+        var go = backAction; _ = Run(go);
+    }
+    // Android 13+ predictive back (the default for apps targeting Android 16) uses this dispatcher instead.
+    sealed class BackCallback(MainActivity owner) : Java.Lang.Object, Android.Window.IOnBackInvokedCallback
+    {
+        public void OnBackInvoked() => owner.HandleBack(fromDispatcher: true);
+    }
+    Task BackToStart()
+    {
+        ble?.Dispose(); ble = null; acquired = null; ShowConnect(); return Task.CompletedTask;
     }
     protected override void OnResume()
     {
@@ -145,7 +175,7 @@ public sealed class MainActivity : Activity
     }
     void Shell(string subtitle)
     {
-        buttons.Clear();
+        buttons.Clear(); backAction = null;
         root = Column(); root.SetBackgroundColor(Palette.Bg); root.FocusableInTouchMode = true; root.RequestFocus();
         root.SetPadding(Dp(20), Dp(20), Dp(20), Dp(10));
         var brandRow = new LinearLayout(this) { Orientation = Orientation.Horizontal }; brandRow.SetGravity(GravityFlags.CenterVertical);
@@ -476,7 +506,7 @@ public sealed class MainActivity : Activity
         string model = await BleReadText(MaxBle.ModelNumber), mode = await BleReadText(MaxBle.DeviceMode);
         string wan = await BleReadText(MaxBle.WanStatus), obaState = await BleReadText(MaxBle.ObaState);
 
-        Shell("Router over Bluetooth");
+        Shell("Router over Bluetooth"); backAction = BackToStart;
         var looksArris = serial.Length > 0 || model.Length > 0;
         var info = Card(string.IsNullOrEmpty(device.Name) ? "Connected device" : device.Name,
             chipText: looksArris ? "mAX" : "unknown", chipColor: looksArris ? Palette.Success : Palette.Muted);
@@ -555,7 +585,7 @@ public sealed class MainActivity : Activity
 
     void ShowReport(string title, string description, string report)
     {
-        Shell(title);
+        Shell(title); backAction = BackToStart;
         var card = Card("Report", description, chipText: "Read-only", chipColor: Palette.Success);
         Action(card, "Copy report", () =>
         {
@@ -583,7 +613,7 @@ public sealed class MainActivity : Activity
 
     Task BleGuidedSetup(string serial, string mac, string model)
     {
-        Shell("Guided setup");
+        Shell("Guided setup"); backAction = BackToStart;
         var target = string.Join("  ·  ", new[] { model, serial, mac }.Where(v => !string.IsNullOrEmpty(v)));
         var warn = Card("Experimental — read first", target.Length > 0 ? "Target: " + target : null, chipText: "Caution", chipColor: Palette.Warning);
         warn.AddView(Label("The exact Bluetooth write format is reconstructed from the official app and has not been confirmed on hardware. A wrong write can leave a factory-reset router recoverable only with the SURFboard Central app. Nothing is sent until you confirm each step below.", 14, color: Palette.Muted));
@@ -596,7 +626,25 @@ public sealed class MainActivity : Activity
         var adminField = Input(admin, "Admin password", GeneratePassword());
         Action(admin, "Regenerate", () => { adminField.Text = GeneratePassword(); return Task.CompletedTask; });
 
-        var steps = Card("Writes (confirm each)", "Each button sends exactly one Bluetooth write, after a confirmation, then reads it back where the router allows.");
+        var steps = Card("Writes (locked)", "Writes are locked. Unlock them only for a spare unit you are ready to factory-reset.", chipText: "Experimental", chipColor: Palette.Danger);
+        var writes = Column(); writes.Visibility = ViewStates.Gone;
+        Button? unlock = null;
+        // Any failed write re-locks the steps: a reported failure can still be partly applied.
+        void Lock(string why)
+        {
+            writes.Visibility = ViewStates.Gone;
+            if (unlock is not null) unlock.Visibility = ViewStates.Visible;
+            status.Text = why;
+        }
+        unlock = Action(steps, "Unlock experimental writes", async () =>
+        {
+            if (!await Confirm("Unlock experimental writes?",
+                "Use these only on a spare unit you can factory-reset.\n\nIn testing, a write that the app reported as rejected was still partly applied, leaving the unit stuck mid-setup until a factory reset and setup with SURFboard Central.\n\nEach write still needs its own confirmation.", "I understand, unlock"))
+                return;
+            writes.Visibility = ViewStates.Visible; unlock!.Visibility = ViewStates.Gone;
+            status.Text = "Experimental writes unlocked for this screen only.";
+        }, Tone.Danger);
+        steps.AddView(writes);
 
         async Task EncryptedWrite(string label, string uuid, Func<string> value, bool experimental)
         {
@@ -607,21 +655,28 @@ public sealed class MainActivity : Activity
             var key = await BleReadText(MaxBle.EncryptionKey);
             if (string.IsNullOrEmpty(key)) throw new RouterException("Could not read the router's encryption key, so nothing was written.");
             var cipher = CloudAcquisition.EncryptForRouter(key, text);
-            await ble!.WriteAsync(uuid, System.Text.Encoding.UTF8.GetBytes(cipher), lifetime.Token);
+            try { await ble!.WriteAsync(uuid, System.Text.Encoding.UTF8.GetBytes(cipher), lifetime.Token); }
+            catch (RouterException ex)
+            {
+                var state = await BleReadText(MaxBle.ObaState);
+                Lock("Writes locked after a failure.");
+                throw new RouterException($"Writing {label} was reported as failed. {ex.Message} Setup state: {(state.Length > 0 ? state : "unknown")}.\n\nThe router may still have partly applied it. Stop here: don't send more writes. If the unit stops responding, factory-reset it and set it up with SURFboard Central.");
+            }
             status.Text = label + " written.";
             await Message("Written", label + " was written to the router.");
         }
 
-        Action(steps, "1 · Write network name (SSID)", () => EncryptedWrite("the SSID", MaxBle.P11Ssid, () => ssid.Text ?? "", true), Tone.Secondary);
-        Action(steps, "2 · Write Wi-Fi password", () => EncryptedWrite("the Wi-Fi password", MaxBle.P11Passphrase, () => passphrase.Text ?? "", true), Tone.Secondary);
-        Action(steps, "3 · Write admin password", () => EncryptedWrite("the admin password", MaxBle.P11UserPwd, () => adminField.Text ?? "", true), Tone.Secondary);
-        Action(steps, "4 · Mark setup complete", async () =>
+        Action(writes, "1 · Write network name (SSID)", () => EncryptedWrite("the SSID", MaxBle.P11Ssid, () => ssid.Text ?? "", true), Tone.Secondary);
+        Action(writes, "2 · Write Wi-Fi password", () => EncryptedWrite("the Wi-Fi password", MaxBle.P11Passphrase, () => passphrase.Text ?? "", true), Tone.Secondary);
+        Action(writes, "3 · Write admin password", () => EncryptedWrite("the admin password", MaxBle.P11UserPwd, () => adminField.Text ?? "", true), Tone.Secondary);
+        Action(writes, "4 · Mark setup complete", async () =>
         {
             if (!await Confirm("Finish setup?", "Send the onboarding-complete signal to the router? Do this only after the earlier writes succeeded.", "Finish"))
             { status.Text = "Setup not marked complete."; return; }
-            await ble!.WriteAsync(MaxBle.ObaComplete, System.Text.Encoding.UTF8.GetBytes("1"), lifetime.Token);
+            try { await ble!.WriteAsync(MaxBle.ObaComplete, System.Text.Encoding.UTF8.GetBytes("1"), lifetime.Token); }
+            catch (RouterException ex) { Lock("Writes locked after a failure."); throw new RouterException("Marking setup complete was reported as failed. " + ex.Message + " The router may still have applied it; check before sending anything else."); }
             status.Text = "Onboarding-complete signal sent.";
-            await Message("Done", "The router was told setup is complete. Join its new Wi-Fi, then use ARRIS account sign-in to save a local credential.");
+            await Message("Done", "The router was told setup is complete. Join its new Wi-Fi. Then save a login: offline, use More options → Enter a local management login with the admin password you wrote (the expected username is not yet confirmed); with Internet, ARRIS account sign-in also works if the unit is registered to your account.");
         }, Tone.Danger);
 
         var back = Card("Finish");
@@ -702,7 +757,7 @@ public sealed class MainActivity : Activity
     void ShowDevices()
     {
         var previousAddress = address?.Text ?? "192.168.7.1";
-        Shell("Finish setup");
+        Shell("Finish setup"); backAction = BackToStart;
         var auto = Card("Find your router", "Make sure this phone is on your router's Wi-Fi.", chipText: "Signed in", chipColor: Palette.Success);
         Action(auto, "Find my router automatically", FinishSetupAsync, Tone.Primary);
         var manual = Card("Or enter its address", "Then tap the router. The app checks its certificate, serial and routing mode before saving.");
@@ -746,6 +801,13 @@ public sealed class MainActivity : Activity
     void ShowRouter()
     {
         Shell(currentPage.Name);
+        backAction = async () =>
+        {
+            if (!await Discard()) return;
+            dirty = false;
+            if (currentPage != Catalog.Pages[0]) { currentPage = Catalog.Pages[0]; ShowRouter(); await Read(); }
+            else { client?.Dispose(); client = null; AndroidNetwork.UseInternet(); ShowConnect(); }
+        };
         var navigation = Card("Connected locally", client!.Record.Address + " · " + client.Record.Serial, chipText: "Connected", chipColor: Palette.Success);
         Action(navigation, "Change section  ⌄", async () =>
         {

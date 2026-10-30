@@ -309,7 +309,7 @@ internal sealed class RouterClient : IDisposable
     }
     public async Task ConnectAsync(CancellationToken token=default)
     {
-        if(testTransport && authenticated)return;
+        if(testTransport){authenticated=true;return;}
 #if ANDROID
         AndroidNetwork.UseLocal();
 #endif
@@ -360,12 +360,25 @@ internal sealed class RouterClient : IDisposable
     {
         await ConnectAsync(token);
         var data=new Dictionary<string,JsonObject>();var reads=new List<ReadResult>();var rows=new List<FieldRow>();
+        var relogged=false;var stop=false;
         foreach(var key in page.Keys)
         {
-            try{var value=await ReadAsync(key,token);data[key]=value;reads.Add(new(key,200,"OK",DateTimeOffset.Now,true));rows.AddRange(Catalog.Flatten(value,key));}
-            catch(RouterException ex){reads.Add(new(key,null,ex.Code.Length>0?ex.Code:ex.Message,DateTimeOffset.Now,false));if(ex.Code=="SessionTimeout"){authenticated=false;break;}}
-            catch(HttpRequestException ex){reads.Add(new(key,null,RouterDiscovery.ConnectionFailure(ex,record.Address),DateTimeOffset.Now,false));}
-            catch(TaskCanceledException) when(!token.IsCancellationRequested){reads.Add(new(key,null,"Timed out",DateTimeOffset.Now,false));}
+            // Reads are safe to repeat: on the first expired session, log in again once and retry this key.
+            for(var attempt=0;attempt<2 && !stop;attempt++)
+            {
+                try{var value=await ReadAsync(key,token);data[key]=value;reads.Add(new(key,200,"OK",DateTimeOffset.Now,true));rows.AddRange(Catalog.Flatten(value,key));break;}
+                catch(RouterException ex) when(ex.Code=="SessionTimeout" && !relogged)
+                {
+                    relogged=true;authenticated=false;Progress?.Invoke("The router session expired; logging in again…");
+                    try{await ConnectAsync(token);}
+                    catch(Exception login) when(login is RouterException or HttpRequestException or TaskCanceledException && !token.IsCancellationRequested)
+                    {reads.Add(new(key,null,"SessionTimeout",DateTimeOffset.Now,false));stop=true;}
+                }
+                catch(RouterException ex){reads.Add(new(key,null,ex.Code.Length>0?ex.Code:ex.Message,DateTimeOffset.Now,false));if(ex.Code=="SessionTimeout"){authenticated=false;stop=true;}break;}
+                catch(HttpRequestException ex){reads.Add(new(key,null,RouterDiscovery.ConnectionFailure(ex,record.Address),DateTimeOffset.Now,false));break;}
+                catch(TaskCanceledException) when(!token.IsCancellationRequested){reads.Add(new(key,null,"Timed out",DateTimeOffset.Now,false));break;}
+            }
+            if(stop)break;
         }
         return new(page,data,reads,rows,DateTimeOffset.Now);
     }
