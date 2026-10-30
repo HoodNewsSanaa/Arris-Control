@@ -76,6 +76,14 @@ jobs:
           if [ -n "$ANDROID_KEYSTORE_BASE64" ] && [ -n "$ANDROID_KEYSTORE_PASSWORD" ] && [ -n "$ANDROID_KEY_ALIAS" ]; then
             printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.p12"
             chmod 600 "$RUNNER_TEMP/release.p12"
+            keytool -exportcert -alias "$ANDROID_KEY_ALIAS" -keystore "$RUNNER_TEMP/release.p12" -storepass:env ANDROID_KEYSTORE_PASSWORD -file "$RUNNER_TEMP/signer.der"
+            expected=$(tr -d '\r\n ' < Android/release-signing.sha256)
+            source_certificate=$(sha256sum "$RUNNER_TEMP/signer.der" | cut -d ' ' -f 1)
+            echo "::notice title=Signing-key certificate::$source_certificate"
+            if [ "$source_certificate" != "$expected" ]; then
+              echo "::error title=Signing key mismatch::The saved signing key does not match the repository certificate pin."
+              exit 1
+            fi
             signing=(-p:AndroidKeyStore=true "-p:AndroidSigningKeyStore=$RUNNER_TEMP/release.p12" "-p:AndroidSigningKeyAlias=$ANDROID_KEY_ALIAS" -p:AndroidSigningStorePass=env:ANDROID_KEYSTORE_PASSWORD -p:AndroidSigningKeyPass=env:ANDROID_KEYSTORE_PASSWORD)
             stable=true
           fi
@@ -93,9 +101,15 @@ jobs:
           signer=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
           "$signer" sign --ks "$RUNNER_TEMP/foreign.p12" --ks-key-alias fixture --ks-pass pass:fictional-ci-password --key-pass pass:fictional-ci-password --out update-probe/foreign.apk update-probe/*-Signed.apk
           if [ "$stable" = true ]; then
-            certificate=$("$signer" verify --print-certs artifacts/*-Signed.apk | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -1)
+            "$signer" verify --print-certs artifacts/*-Signed.apk > artifacts/signing-check.txt
+            certificate=$(sed -nE 's/.*certificate SHA-256 digest: ([0-9a-fA-F]{64}).*/\1/p' artifacts/signing-check.txt | tr '[:upper:]' '[:lower:]' | sort -u)
             expected=$(tr -d '\r\n ' < Android/release-signing.sha256)
-            test "$certificate" = "$expected"
+            echo "::notice title=APK certificate::$certificate"
+            if [ "$certificate" != "$expected" ]; then
+              cat artifacts/signing-check.txt
+              echo "::error title=APK signer mismatch::The APK certificate does not match the saved permanent key."
+              exit 1
+            fi
             echo "::notice title=Permanent APK signer::$certificate"
           fi
       - name: Collect APK and checksum
@@ -132,9 +146,11 @@ jobs:
             artifacts/SHA256SUMS-android.txt
             artifacts/Android-UI-preview.png
             artifacts/android-smoke.log
+            artifacts/signing-check.txt
+            artifacts/*-Signed.apk
           if-no-files-found: error
           retention-days: 90
-      - name: Publish Android preview download
+      - name: Publish latest Android release
         if: (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish)) && env.STABLE_SIGNING == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -142,5 +158,5 @@ jobs:
           gh release create android-preview-${{ github.run_number }}
           artifacts/Arris-Control-android.apk artifacts/SHA256SUMS-android.txt artifacts/Android-UI-preview.png
           --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA"
-          --title "Arris Control Android preview ${{ github.run_number }}"
-          --notes-file Android/RELEASE-NOTES.md --prerelease --latest=false
+          --title "Arris Control Android 0.3.0 (build ${{ github.run_number }})"
+          --notes-file Android/RELEASE-NOTES.md --latest=true
