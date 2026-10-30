@@ -38,10 +38,10 @@ for _ in range(45):
     ui = adb('shell', 'cat', '/sdcard/arris-ui.xml')
     if 'PASS: Android API scan, HTTPS login and reconnect.' in ui:
         # Sessions 1 and 2 read identity, mode and one page (3 each); the legacy upgrade reads identity and mode (2).
-        if fixture.logins != 3 or fixture.anonymous_reads < 1 or fixture.protected_reads < 8:
-            annotate(f'Fixture counters: logins={fixture.logins} (expected 3), anonymous_reads={fixture.anonymous_reads}, protected_reads={fixture.protected_reads} (expected >= 8)')
+        if fixture.logins != 4 or fixture.anonymous_reads < 1 or fixture.protected_reads < 10:
+            annotate(f'Fixture counters: logins={fixture.logins} (expected 4), anonymous_reads={fixture.anonymous_reads}, protected_reads={fixture.protected_reads} (expected >= 10)')
             raise SystemExit('Fixture did not observe the expected anonymous scan and exactly three authenticated sessions (none from the impostor check)')
-        print('PASS: APK UI, Android Keystore, anonymous API scan, actual HTTPS login/cookies, saved address update, reconnect, certificate-pin impostor refusal and legacy pin upgrade.')
+        print('PASS: APK UI, Android Keystore, anonymous API scan, actual HTTPS login/cookies, saved address update, reconnect, certificate-pin impostor refusal, legacy pin upgrade and pending offline-login verification without cloud.')
         adb('root')
         adb('wait-for-device')
         adb('pull', '/data/user/0/com.hoodnewssanaa.arriscontrol/cache/ui-preview.png', 'artifacts/Android-UI-preview.png')

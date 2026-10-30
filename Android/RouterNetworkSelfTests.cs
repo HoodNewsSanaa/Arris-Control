@@ -23,7 +23,7 @@ internal static class RouterNetworkSelfTests
         var pin=endpoints[0].Pin;
         var directory=Path.Combine(Path.GetTempPath(),"router-network-test-"+Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
-        string? updatedPath=null, preservedPath=null, pinnedPath=null, legacyPreserved=null;
+        string? updatedPath=null, preservedPath=null, pinnedPath=null, legacyPreserved=null, offlinePath=null;
         try
         {
             var device=new CloudDevice("Fixture mAX","TESTSERIAL123",mac);
@@ -73,7 +73,19 @@ internal static class RouterNetworkSelfTests
                 if(pinnedPath==legacyFile || CredentialStore.Load(legacy.Record,false).CertificatePin!=pin)
                     throw new InvalidOperationException("The legacy credential was not upgraded to the fixture's certificate pin.");
             }
-            Console.WriteLine("PASS: anonymous scan with pin, native Android HTTPS login, cookie handling, verified address update, reconnect, impostor refusal and legacy pin upgrade.");
+            // A first-time offline draft must verify through local HTTPS alone, with no
+            // account protocol reference, cloud API instance or cloud sign-in involved.
+            var draft=new OfflineSetupDraft(device,login,"Fixture Wi-Fi");
+            var pending=OfflineSetupStore.Save(draft,directory);
+            var restored=OfflineSetupStore.Load(pending);
+            var verified=await CloudAcquisition.VerifyAndSaveAsync(new(restored.Credential,[restored.Device]),
+                restored.Device,host,token,pin,"Offline setup fixture, authenticated local verification");
+            offlinePath=verified.Path;
+            if(CredentialStore.Load(verified,false).CertificatePin!=pin ||
+                !File.ReadAllText(verified.Path).Contains("Offline setup fixture"))
+                throw new InvalidOperationException("The pending offline login did not verify and pin its local router.");
+            File.Delete(pending);
+            Console.WriteLine("PASS: anonymous scan with pin, native Android HTTPS login, cookie handling, verified address update, reconnect, impostor refusal, legacy pin upgrade and pending offline-login verification without cloud.");
         }
         finally
         {
@@ -81,6 +93,7 @@ internal static class RouterNetworkSelfTests
             if(preservedPath is not null && File.Exists(preservedPath)) File.Delete(preservedPath);
             if(pinnedPath is not null && File.Exists(pinnedPath)) File.Delete(pinnedPath);
             if(legacyPreserved is not null && File.Exists(legacyPreserved)) File.Delete(legacyPreserved);
+            if(offlinePath is not null && File.Exists(offlinePath)) File.Delete(offlinePath);
             foreach(var path in Directory.EnumerateFiles(directory)) File.Delete(path);
             Directory.Delete(directory);
         }
