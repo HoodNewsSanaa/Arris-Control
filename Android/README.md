@@ -105,7 +105,12 @@ This does not implement factory onboarding, account recovery, MFA challenges, fi
 
 ## Build and verification
 
-GitHub Actions builds on `main`, `codex/android`, relevant PRs and manual dispatch. Permanently signed push builds publish a separate Android prerelease without replacing the latest stable Windows release. The workflow runs shared offline regression tests, publishes the APK, launches it on an Android 15 x86_64 emulator, and runs those fixtures plus Android Keystore encryption/tamper tests inside the actual app. It also runs an emulator-host HTTPS router fixture to verify anonymous API discovery, real login/session cookies, verified address changes and reconnect from an encrypted saved profile. It uploads APK/checksum/UI-preview artifacts. Public updater releases are published only when permanent signing is configured.
+GitHub Actions builds on `main`, `codex/android`, relevant PRs and manual dispatch. Permanently signed push builds publish the latest stable Android release. The numbered `android-preview-N` tags are retained for updater compatibility. The workflow runs shared offline regressions, builds the APK, launches it on an Android 15 x86_64 emulator, and checks Android Keystore encryption and a real in-place update that retains an encrypted login. An emulator-host HTTPS router fixture verifies discovery, login/session cookies, address changes and reconnect. Publishing requires all checks and permanent signing.
+
+The optional browser-interface experiment is available only from Software access
+diagnostics. Review and confirm it separately. It changes only WEBUIENABLE on the
+inspected W30 hardware/firmware and reads back the result; it does not promise a
+working browser interface or shell. See [software-access notes](../docs/software-access.md).
 
 Locally with .NET 10, JDK 21 and the Android SDK:
 

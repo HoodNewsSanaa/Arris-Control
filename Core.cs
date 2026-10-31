@@ -286,7 +286,7 @@ internal sealed class LocalWire : IRouterWire
     public void Dispose()=>client.Dispose();
 }
 
-internal sealed class RouterClient : IDisposable
+internal sealed partial class RouterClient : IDisposable
 {
     CredentialRecord record;IRouterWire wire;bool authenticated;readonly bool testTransport;string? pin;
     public CredentialRecord Record=>record;
@@ -451,7 +451,7 @@ internal static class Diagnostics
     // Separate, user-selected report for software-access investigation. These
     // GET groups are observed in the official app; no setter is exposed here.
     public static readonly string[] AccessKeys=[
-        "DEVICE_INFO_ALL","FIRMWARE_ALL","DEVICESTATUS_ALL","DEVICESETTINGSFEATURE_ALL",
+        "DEVICE_INFO_ALL","FIRMWARE_ALL","DEVICEOPERMODE_ALL","DEVICESTATUS_ALL","DEVICESETTINGSFEATURE_ALL",
         "LOGINCFG_ALL","REMOTE_CONFIG_ALL","VENDOR_INFO_ALL","CLOUDSETTINGSFEATURE_ALL",
         "GET_CAPABILITIES_ALL","METRICS_ALL","LASTACCESSTIME_ALL"];
     public static readonly Page AccessPage=new("accessdiagnostics","Software access diagnostics",

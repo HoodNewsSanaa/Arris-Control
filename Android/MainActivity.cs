@@ -1076,6 +1076,22 @@ public sealed partial class MainActivity : Activity
         {
             currentPage = Diagnostics.AccessPage; dirty = false; ShowRouter(); await Read();
         });
+        if (access && snapshot.Data.TryGetValue("LOGINCFG_ALL", out var loginConfig) &&
+            Catalog.Text(loginConfig["LOGINCFG"]?["WEBUIENABLE"]) is "0" or "1")
+        {
+            var enabled = Catalog.Text(loginConfig["LOGINCFG"]?["WEBUIENABLE"]) == "1";
+            card.AddView(Label("Browser interface experiment · " + (enabled ? "flag on" : "flag off") +
+                "\nThis firmware reports no browser-interface support. The flag may have no effect. Review before changing it.", 12));
+            Action(card, enabled ? "Review disabling browser access" : "Review enabling browser access", async () =>
+            {
+                var plan = await Task.Run(() => client!.PrepareWebUiExperimentAsync(!enabled, lifetime.Token), lifetime.Token);
+                if (!await Confirm("Try this browser-interface setting?", plan.Preview, enabled ? "Disable flag" : "Enable flag"))
+                { status.Text = "Cancelled; nothing was sent."; return; }
+                var result = await Task.Run(() => client!.ApplyWebUiExperimentAsync(plan, lifetime.Token), lifetime.Token);
+                await Message("Browser interface result", result);
+                ShowRouter(); await Read();
+            }, Tone.Danger);
+        }
         var text = Label(report, 11, color: Palette.Text);
         text.SetTypeface(Android.Graphics.Typeface.Monospace, Android.Graphics.TypefaceStyle.Normal); text.SetTextIsSelectable(true);
         card.AddView(text);

@@ -106,6 +106,7 @@ internal static class SelfTests
     }
     public static async Task RunAsync()
     {
+        await WebUiExperimentSelfTests.RunAsync();
         await OfflineSetupSelfTests.RunAsync();
         await CloudSelfTests.RunAsync();
         await DiscoverySelfTests.RunAsync();

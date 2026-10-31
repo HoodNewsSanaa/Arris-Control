@@ -1,3 +1,16 @@
+Android 0.3.2 — reviewed browser-interface experiment:
+
+- Software access diagnostics now includes operating mode.
+- A separate review/confirmation can change only WEBUIENABLE on the inspected
+  W30 / WR11AXER1 / AXR.0814.240522.10. It rechecks identity, startup/update
+  status and the login-settings baseline before sending once, then reads back.
+- No username, password, remote-access flag or firmware is sent. The generic
+  settings editor still refuses login changes. A lost reply is never retried.
+- This firmware advertises no web interface support. A changed flag does not
+  establish a working browser interface, SSH or root access.
+- Fully offline first-time provisioning and protected local login were confirmed
+  by the user on this W30/firmware using build 59, with WAN disconnected.
+
 Android 0.3.1 — software access diagnostics:
 
 - Diagnostics now offers a separate Software access diagnostics report for
