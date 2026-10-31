@@ -1076,6 +1076,29 @@ public sealed partial class MainActivity : Activity
         {
             currentPage = Diagnostics.AccessPage; dirty = false; ShowRouter(); await Read();
         });
+        if (access) Action(card, "Inspect firmware source", async () =>
+        {
+            var address = await Task.Run(async () =>
+            {
+                await client!.ConnectAsync(lifetime.Token);
+                await client.VerifyIdentityAsync(lifetime.Token);
+                var update = await client.ReadAsync("UPDATE_ALL", lifetime.Token);
+                return Catalog.Text(update["UPDATE"]?["URL"]);
+            }, lifetime.Token);
+            if (address.Length > 4096 || !Uri.TryCreate(address, UriKind.Absolute, out var source) ||
+                source.Scheme is not ("http" or "https"))
+            { await Message("Firmware source", "The router did not return a supported update-source address."); return; }
+            // Show locally for review; never add a potentially private URL to
+            // the shareable diagnostic report or open/download it automatically.
+            var detail = address + "\n\nThis is the router's configured update source; it may be a lookup service rather than a firmware image. " +
+                "Nothing has been downloaded or installed.";
+            if (source.Query.Length > 0 || source.UserInfo.Length > 0)
+                detail += "\nThis address contains parameters or credentials. Review it before sharing.";
+            if (!await Confirm("Firmware update source", detail, "Copy address")) return;
+            var clipboard = (Android.Content.ClipboardManager)GetSystemService(ClipboardService)!;
+            clipboard.PrimaryClip = ClipData.NewPlainText("Router firmware source", address);
+            status.Text = "Firmware source copied. No update check, download or installation was started.";
+        });
         if (access && snapshot.Data.TryGetValue("LOGINCFG_ALL", out var loginConfig) &&
             Catalog.Text(loginConfig["LOGINCFG"]?["WEBUIENABLE"]) is "0" or "1")
         {

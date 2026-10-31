@@ -1,5 +1,8 @@
 Android 0.3.2 — reviewed browser-interface experiment:
 
+- Inspect the router's configured firmware source locally, with an optional
+  copy after review. No update check, download or firmware write is performed;
+  the address remains excluded from shared diagnostics.
 - Software access diagnostics now includes operating mode.
 - A separate review/confirmation can change only WEBUIENABLE on the inspected
   W30 / WR11AXER1 / AXR.0814.240522.10. It rechecks identity, startup/update

@@ -45,6 +45,12 @@ https://arris.my.salesforce-sites.com/consumers/articles/knowledge/mAX-W30-W31-A
 
 ## Alternative firmware
 
+Software access diagnostics also offers Inspect firmware source. This reads
+UPDATE_ALL and shows the configured HTTP(S) source locally. It may point to an
+update lookup service rather than an image. Copying is separate from inspection;
+addresses with parameters or credentials receive a review notice and are never
+included in shared diagnostics. No download, update check or install is sent.
+
 The published ARRIS profile uses BCM4908 and WR11AXER1a. The supplied ASUS
 RT-AX88U firmware has related Broadcom boot files but an ASUS product target and
 RAM-stage bootloader. Matching processors does not establish compatible board
