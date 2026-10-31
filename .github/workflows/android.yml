@@ -1,0 +1,163 @@
+name: Build Android APK
+on:
+  push:
+    branches: [main, 'codex/android']
+    paths:
+      - 'Android/**'
+      - 'Tests/**'
+      - '*.cs'
+      - '.github/workflows/android.yml'
+  pull_request:
+    paths:
+      - 'Android/**'
+      - 'Tests/**'
+      - '*.cs'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the tested APK after permanent signing is configured
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows-regression:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: 10.0.x
+      - name: Build Windows app and run original packaged regressions
+        shell: pwsh
+        run: ./build.ps1
+  apk:
+    needs: windows-regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: write
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_GENERATE_ASPNET_CERTIFICATE: 'false'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Refuse private SURFboard references in public builds
+        run: |
+          if git ls-files --error-unmatch Android/protocol.local.json >/dev/null 2>&1 || [ -e Android/protocol.local.json ]; then
+            echo "::error title=Private reference::Android/protocol.local.json must never be committed or built in CI."
+            exit 1
+          fi
+      - name: Offline shared protocol tests
+        run: dotnet run --project Tests/Arris-Control.Tests.csproj -c Release
+      - name: Install Android workload
+        run: dotnet workload install android
+      - name: Build standalone installable APK
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ github.event_name != 'pull_request' && secrets.ANDROID_KEYSTORE_BASE64 || '' }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.ANDROID_KEYSTORE_PASSWORD || '' }}
+          ANDROID_KEY_ALIAS: ${{ github.event_name != 'pull_request' && secrets.ANDROID_KEY_ALIAS || '' }}
+        run: |
+          signing=(-p:AndroidKeyStore=false)
+          stable=false
+          trap 'rm -f "$RUNNER_TEMP/release.p12" "$RUNNER_TEMP/foreign.p12"' EXIT
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ] && [ -n "$ANDROID_KEYSTORE_PASSWORD" ] && [ -n "$ANDROID_KEY_ALIAS" ]; then
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.p12"
+            chmod 600 "$RUNNER_TEMP/release.p12"
+            keytool -exportcert -alias "$ANDROID_KEY_ALIAS" -keystore "$RUNNER_TEMP/release.p12" -storepass:env ANDROID_KEYSTORE_PASSWORD -file "$RUNNER_TEMP/signer.der"
+            expected=$(tr -d '\r\n ' < Android/release-signing.sha256)
+            source_certificate=$(sha256sum "$RUNNER_TEMP/signer.der" | cut -d ' ' -f 1)
+            echo "::notice title=Signing-key certificate::$source_certificate"
+            if [ "$source_certificate" != "$expected" ]; then
+              echo "::error title=Signing key mismatch::The saved signing key does not match the repository certificate pin."
+              exit 1
+            fi
+            signing=(-p:AndroidKeyStore=true "-p:AndroidSigningKeyStore=$RUNNER_TEMP/release.p12" "-p:AndroidSigningKeyAlias=$ANDROID_KEY_ALIAS" -p:AndroidSigningStorePass=env:ANDROID_KEYSTORE_PASSWORD -p:AndroidSigningKeyPass=env:ANDROID_KEYSTORE_PASSWORD)
+            stable=true
+          fi
+          echo "STABLE_SIGNING=$stable" >> "$GITHUB_ENV"
+          if [ "$stable" != true ]; then
+            echo "::warning title=Signing setup pending::Building a test APK only. Public updater releases require the permanent signing secrets."
+          fi
+          dotnet publish Android/Arris-Control.Android.csproj -c Release -p:AndroidPackageFormats=apk "${signing[@]}" -p:ApplicationVersion=${{ github.run_number }} -o artifacts
+          # Version properties alone can leave the previous generated manifest
+          # in the incremental Android build. Keep the first copied APK, then
+          # clean intermediates before building the genuinely newer probe.
+          dotnet clean Android/Arris-Control.Android.csproj -c Release
+          dotnet publish Android/Arris-Control.Android.csproj -c Release -p:AndroidPackageFormats=apk "${signing[@]}" -p:ApplicationVersion=$(( ${{ github.run_number }} + 1 )) -o update-probe
+          keytool -genkeypair -alias fixture -keyalg RSA -keysize 2048 -validity 2 -dname "CN=Fictional CI signer" -storetype PKCS12 -keystore "$RUNNER_TEMP/foreign.p12" -storepass fictional-ci-password -keypass fictional-ci-password
+          signer=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          "$signer" sign --ks "$RUNNER_TEMP/foreign.p12" --ks-key-alias fixture --ks-pass pass:fictional-ci-password --key-pass pass:fictional-ci-password --out update-probe/foreign.apk update-probe/*-Signed.apk
+          if [ "$stable" = true ]; then
+            "$signer" verify --print-certs artifacts/*-Signed.apk > artifacts/signing-check.txt
+            certificate=$(sed -nE 's/.*certificate SHA-256 digest: ([0-9a-fA-F]{64}).*/\1/p' artifacts/signing-check.txt | tr '[:upper:]' '[:lower:]' | sort -u)
+            expected=$(tr -d '\r\n ' < Android/release-signing.sha256)
+            echo "::notice title=APK certificate::$certificate"
+            if [ "$certificate" != "$expected" ]; then
+              cat artifacts/signing-check.txt
+              echo "::error title=APK signer mismatch::The APK certificate does not match the saved permanent key."
+              exit 1
+            fi
+            echo "::notice title=Permanent APK signer::$certificate"
+          fi
+      - name: Collect APK and checksum
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          from pathlib import Path
+          files = list(Path('artifacts').glob('*-Signed.apk'))
+          if len(files) != 1:
+              raise SystemExit(f'Expected one universal signed APK, found {len(files)}')
+          target = Path('artifacts/Arris-Control-android.apk')
+          files[0].replace(target)
+          Path('artifacts/SHA256SUMS-android.txt').write_text(hashlib.sha256(target.read_bytes()).hexdigest() + '  ' + target.name + '\n')
+          PY
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Android launch and Keystore smoke test
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          script: python3 Android/smoke-test.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: Arris-Control-Android
+          path: |
+            artifacts/Arris-Control-android.apk
+            artifacts/SHA256SUMS-android.txt
+            artifacts/Android-UI-preview.png
+            artifacts/android-smoke.log
+            artifacts/signing-check.txt
+            artifacts/*-Signed.apk
+          if-no-files-found: error
+          retention-days: 90
+      - name: Publish latest Android release
+        if: (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish)) && env.STABLE_SIGNING == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(python3 -c 'from xml.etree import ElementTree as E; print(E.parse("Android/Arris-Control.Android.csproj").findtext(".//ApplicationDisplayVersion"))')
+          gh release create android-preview-${{ github.run_number }} \
+          artifacts/Arris-Control-android.apk artifacts/SHA256SUMS-android.txt artifacts/Android-UI-preview.png \
+          --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+          --title "Arris Control Android $version (build ${{ github.run_number }})" \
+          --notes-file Android/RELEASE-NOTES.md --latest=true

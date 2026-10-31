@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
+    <DefineConstants>$(DefineConstants);PORTABLE_TEST</DefineConstants><NuGetAudit>false</NuGetAudit>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../Core.cs;../FirmwareLookupCapture.cs;../FirmwareLookupCaptureSelfTests.cs;../WebUiExperiment.cs;../WebUiExperimentSelfTests.cs;../OfflineSetup.cs;../OfflineSetupSelfTests.cs;../Settings.cs;../RouterDiscovery.cs;../CloudAcquisition.cs;../CloudProtocol.cs;../CognitoCrypto.cs;../AcquisitionStore.cs;../SelfTests.cs;../CloudSelfTests.cs;../DiscoverySelfTests.cs" Link="Shared/%(Filename)%(Extension)" />
+    <EmbeddedResource Include="../srp-test-vector.json" />
+    <Compile Include="../Android/Updates/UpdateProtocol.cs;../Android/Updates/UpdateProtocolSelfTests.cs" Link="AndroidUpdates/%(Filename)%(Extension)" />
+    <Compile Include="../Android/Ble/BleCapture.cs;../Android/Ble/BleCaptureSelfTests.cs" Link="BluetoothCapture/%(Filename)%(Extension)" />
+    <Compile Include="../Android/Ble/BleManualCommand.cs;../Android/Ble/BleManualCommandSelfTests.cs" Link="BluetoothManual/%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

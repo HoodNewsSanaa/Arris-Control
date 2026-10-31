@@ -1,15 +1,15 @@
-Automatically locates the selected router when its saved IP stops matching or
-responding, including address changes after enabling bypass. Checks the saved
-address first, then performs bounded local Wi-Fi/Ethernet discovery on port 50011.
-Only a unique matching certificate is eligible for login; authenticated exact
-serial and protected mode reads are required before selecting the new address.
+Pins the router's TLS public key (0.4.0).
 
-Retains the updated address in a new encrypted credential profile, preserves old
-versions, and updates the router selector/status. No cloud requests or router
-settings writes are used for discovery. Interrupted settings writes are not retried.
+The router certificate's common name is its MAC, which any device on the network
+can copy into its own certificate. Earlier versions accepted any certificate with
+that name, so an impostor answering during automatic discovery could receive the
+router login. The app now records the certificate's public-key hash at the first
+successful login, stores it inside the DPAPI-encrypted credential, and requires it
+for every connection and discovery probe. A mismatching certificate fails before
+any credential is sent.
 
-Offline checks cover saved-address selection, moved addresses, subnet bounds,
-public-address exclusion, ambiguous/missing matches, cancellation, and encrypted
-payload preservation. Existing protocol, credential, settings, WPF and updater
-checks remain. No live router settings were changed for this release. Native
-live automatic reconnection and bridge-to-router recovery still need validation.
+Credentials saved by 0.3.0 and earlier connect only at their saved address, never
+by scanning, and are upgraded to a new pinned version after one successful login.
+The original record is kept. Offline checks cover copied-MAC impostor certificates,
+other MACs, expired and malformed pins, encrypted pin round-trips, the legacy
+saved-address limit and the pin upgrade.

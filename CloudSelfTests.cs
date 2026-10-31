@@ -63,11 +63,16 @@ internal static class CloudSelfTests
         Assert(refused && extraChallenge.Operations.Count==1,"Unsupported challenge continued into account/router access.");
         using var missing=new FakeCloud{MissingSso=true};refused=false;try{await CloudAcquisition.AcquireAsync("fictional@example.com","FictionalCloudPassword123!",Config,missing);}catch(RouterException){refused=true;}
         Assert(refused,"Missing account credential was fabricated or accepted.");
-        var directory=Path.Combine(AppContext.BaseDirectory,"cloud-selftest-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(directory);
+        var directory=Path.Combine(Path.GetTempPath(),"cloud-selftest-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(directory);
         try
         {
             var java=Path.Combine(directory,"BuildConfig.java");File.WriteAllText(java,string.Join('\n',Names.Select((n,i)=>$"public static final String {n} = \"{Values[i]}\";")));
             Assert(CloudProtocol.ReadReference(java)==Config,"Java protocol constant extraction failed.");
+            Assert(CloudProtocol.FromJson(CloudProtocol.ToJson(Config))==Config,"Bundled protocol reference JSON did not round-trip.");
+            Assert(CloudProtocol.LoadEmbedded() is null,"A protocol reference is embedded in a test/CI build; it must only exist in personal builds.");
+            var unsupported=Path.Combine(directory,"base.apk");
+            using(var baseFile=File.Create(unsupported))using(var archive=new ZipArchive(baseFile,ZipArchiveMode.Create))archive.CreateEntry("placeholder");
+            Assert(CloudProtocol.ReadReferences([unsupported,java])==Config,"Installed-reference fallback did not check later APK/split sources.");
             using var apkMemory=new MemoryStream();using(var apk=new ZipArchive(apkMemory,ZipArchiveMode.Create,true)){using var stream=apk.CreateEntry("classes.dex").Open();stream.Write(DexFixture());}
             var apkBytes=apkMemory.ToArray();var apkFile=Path.Combine(directory,"reference.apk");File.WriteAllBytes(apkFile,apkBytes);Assert(CloudProtocol.ReadReference(apkFile)==Config,"DEX protocol extraction failed.");
             var xapkFile=Path.Combine(directory,"reference.xapk");using(var file=File.Create(xapkFile))using(var zip=new ZipArchive(file,ZipArchiveMode.Create)){using var stream=zip.CreateEntry("com.arris.sbc.apk").Open();stream.Write(apkBytes);}
@@ -80,17 +85,41 @@ internal static class CloudSelfTests
     {
         // Use fictional data only. Restricted tool profiles may lack DPAPI;
         // a successful Windows profile must pass actual disk round-trips.
-        try{var probe=ProtectedData.Protect([1,2,3],null,DataProtectionScope.CurrentUser);CryptographicOperations.ZeroMemory(probe);}
+        try{var probe=CredentialProtection.Protect([1,2,3],null);CryptographicOperations.ZeroMemory(probe);}
         catch(CryptographicException){Console.WriteLine("SKIP: DPAPI persistence fixture unavailable in this restricted Windows profile; no plaintext fallback or file written.");return;}
-        var device=acquired.Devices.Single();var first=CredentialStore.SaveVerified(acquired.Credential,device,"192.168.7.1",directory);
-        var second=CredentialStore.SaveVerified(acquired.Credential,device,"192.168.7.1",directory);
+        var pin=Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes("fictional router public key")));
+        var device=acquired.Devices.Single();var first=CredentialStore.SaveVerified(acquired.Credential,device,"192.168.7.1",pin,directory);
+        var second=CredentialStore.SaveVerified(acquired.Credential,device,"192.168.7.1",pin,directory);
         Assert(first.Path!=second.Path && File.Exists(first.Path)&&File.Exists(second.Path),"Credential versions were overwritten.");
-        var loaded=CredentialStore.Load(first,false);Assert(loaded==acquired.Credential,"Protected credential disk round-trip failed.");
+        var loaded=CredentialStore.Load(first,false);Assert(loaded==(acquired.Credential with{CertificatePin=pin}),"Protected credential and certificate pin disk round-trip failed.");
         Assert(!File.ReadAllText(first.Path).Contains(acquired.Credential.Password),"Plaintext router password written to disk.");
+        Assert(!File.ReadAllText(first.Path).Contains(pin),"Certificate pin stored outside the encrypted payload.");
+        var unpinned=false;try{CredentialStore.SaveVerified(acquired.Credential,device,"192.168.7.1","not-a-pin",directory);}catch(RouterException){unpinned=true;}
+        Assert(unpinned,"A credential was saved without a valid certificate pin.");
+        // A record saved before pinning existed loads without a pin, then upgrades to a new pinned version.
+        var legacy=WriteRecord(acquired.Credential,device,directory,"legacy.json",null);
+        var legacyCredential=CredentialStore.Load(legacy,false);Assert(legacyCredential.CertificatePin is null,"A legacy credential gained a pin without verification.");
+        var upgraded=CredentialStore.SavePinned(legacy,legacyCredential,"192.168.7.1",pin,directory);
+        Assert(upgraded.Path!=legacy.Path && File.Exists(legacy.Path) && CredentialStore.Load(upgraded,false).CertificatePin==pin,"Legacy credential pin upgrade failed or overwrote the original.");
+        var corrupt=WriteRecord(acquired.Credential,device,directory,"corrupt-pin.json","not-a-pin");
+        var rejected=false;try{CredentialStore.Load(corrupt,false);}catch(RouterException){rejected=true;}
+        Assert(rejected,"An invalid encrypted certificate pin was accepted.");
         var pending=AcquisitionStore.Save(acquired,directory);var restored=AcquisitionStore.Load(pending,false);
         Assert(restored.Credential==acquired.Credential && restored.Devices.SequenceEqual(acquired.Devices),"Acquisition disk round-trip failed.");
         Assert(!File.ReadAllText(pending).Contains(acquired.Credential.Password),"Plaintext acquired credential written to disk.");
-        Console.WriteLine("PASS: Windows DPAPI disk round-trips and retention of distinct credential versions (fictional data only).");
+        Console.WriteLine("PASS: encrypted disk round-trips, encrypted certificate pins, legacy pin upgrade and retention of distinct credential versions (fictional data only).");
+    }
+    // Writes a record the way earlier versions did: the encrypted payload carries only the login
+    // unless a pin is supplied. Fictional data only.
+    static CredentialRecord WriteRecord(RouterCredential credential,CloudDevice device,string directory,string name,string? pin)
+    {
+        var payload=new JsonObject{["UserName"]=credential.UserName,["Password"]=credential.Password};
+        if(pin is not null)payload["CertificatePin"]=pin;
+        var cipher=CredentialProtection.Protect(Encoding.UTF8.GetBytes(payload.ToJsonString()),Encoding.UTF8.GetBytes($"ArrisLocalCredential.v1|{device.Serial}|{device.Mac}"));
+        var file=Path.Combine(directory,name);
+        File.WriteAllText(file,new JsonObject{["Format"]="ARRIS-LocalCredential",["Version"]=1,["TargetSerial"]=device.Serial,["ExpectedMac"]=device.Mac,
+            ["RouterAddress"]="192.168.7.1",["Ciphertext"]=Convert.ToBase64String(cipher)}.ToJsonString());
+        return CredentialStore.Inspect(file);
     }
     static byte[] DexFixture()
     {
