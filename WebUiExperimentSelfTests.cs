@@ -17,6 +17,7 @@ internal static class WebUiExperimentSelfTests
             token.ThrowIfCancellationRequested();
             if (path == "/setData")
             {
+                Settings.ValidateEnvelope(body!);
                 var root = JsonNode.Parse(body!)!.AsObject(); var request = root["REQUEST"]!.AsObject();
                 var login = request["LOGINCFG"]!.AsObject(); var value = Catalog.Text(login["WEBUIENABLE"]);
                 Check(root.Count == 1 && request.Count == 2 && Catalog.Text(request["OPERTYPE"]) == "MODIFY" &&
@@ -46,6 +47,13 @@ internal static class WebUiExperimentSelfTests
     }
     public static async Task RunAsync()
     {
+        foreach(var value in new[]{"0","1"}) Settings.ValidateEnvelope(new WebUiPlan(new JsonObject(),value,"","").Body);
+        foreach(var body in new[]{
+            """{"REQUEST":{"OPERTYPE":"MODIFY","LOGINCFG":{"WEBUIENABLE":"2"}}}""",
+            """{"REQUEST":{"OPERTYPE":"MODIFY","LOGINCFG":{"WEBUIENABLE":true}}}""",
+            """{"REQUEST":{"OPERTYPE":"MODIFY","LOGINCFG":{"WEBUIENABLE":"1","WEBUIPASSWORD":"no"}}}""",
+            """{"REQUEST":{"OPERTYPE":"DELETE","LOGINCFG":{"WEBUIENABLE":"1"}}}"""})
+            await Refuses(()=>{Settings.ValidateEnvelope(body);return Task.CompletedTask;},"Unsafe login envelope admitted.");
         var normal = new Fixture();
         using (var client = Client(normal))
         {

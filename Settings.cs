@@ -272,6 +272,15 @@ internal static class Settings
         var root=JsonNode.Parse(body) as JsonObject;
         if(root?.Count!=1 || root["REQUEST"] is not JsonObject request || request.Count!=2)throw new RouterException("Unsupported settings payload.");
         var operation=Catalog.Text(request["OPERTYPE"]);var entry=request.FirstOrDefault(kv=>kv.Key!="OPERTYPE");
+        // The reviewed experiment has one exact payload; no login/password editor
+        // or other LOGINCFG fields are admitted by the transport allowlist.
+        if(entry.Key=="LOGINCFG")
+        {
+            if(operation!="MODIFY" || entry.Value is not JsonObject login || login.Count!=1 ||
+                login["WEBUIENABLE"] is not JsonValue flag || !flag.TryGetValue<string>(out var value) || value is not ("0" or "1"))
+                throw new RouterException("Unsupported browser-interface request.");
+            return;
+        }
         var def=Definitions.FirstOrDefault(d=>d.Container==entry.Key)??throw new RouterException("This operation is not available in this build.");
         if(entry.Value is not JsonObject fields || operation is not ("MODIFY" or "ADD" or "DELETE") || operation!="MODIFY" && !def.Collection)
             throw new RouterException("Unsupported settings operation.");

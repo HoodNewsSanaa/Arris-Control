@@ -1,3 +1,13 @@
+Android 0.3.3 — fix browser-interface experiment transport validation:
+
+- Fix an app-side rejection that prevented the reviewed WEBUIENABLE request
+  from reaching the router. Only MODIFY with exactly WEBUIENABLE="0" or "1"
+  is permitted; account/password fields and generic login editing remain blocked.
+- The Android emulator now sends enable and disable through actual HTTPS,
+  authentication and transport validation, and checks both read-backs.
+- Router support remains unverified; a changed flag does not establish root
+  access or a working browser interface.
+
 Android 0.3.2 — reviewed browser-interface experiment:
 
 - Inspect the router's configured firmware source locally, with an optional

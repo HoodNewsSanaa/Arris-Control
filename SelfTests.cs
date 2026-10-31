@@ -91,7 +91,7 @@ internal static class SelfTests
             !accessReport.Contains("PrivateAdmin") && !accessReport.Contains("NeverShare"),
             "Access report leaked an account value or hid the web-interface state.");
         Assert(Settings.Sections(accessSnapshot).Count==0,"Access configuration became editable.");
-        Refuses(()=>Settings.ValidateEnvelope("""{"REQUEST":{"OPERTYPE":"MODIFY","LOGINCFG":{"WEBUIENABLE":"1"}}}"""),
+        Refuses(()=>Settings.ValidateEnvelope("""{"REQUEST":{"OPERTYPE":"MODIFY","LOGINCFG":{"WEBUIENABLE":"1","SSOPASSWORD":"forbidden"}}}"""),
             "Read-only access diagnostics enabled a configuration write.");
         var accessWire=new FakeWire();
         foreach(var key in Diagnostics.AccessKeys)

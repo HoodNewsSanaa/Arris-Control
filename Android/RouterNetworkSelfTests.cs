@@ -38,6 +38,12 @@ internal static class RouterNetworkSelfTests
                 var page=await first.ReadPageAsync(new Page("fixture","Fixture","",["DEVICEOPERMODE_ALL"]),token);
                 if(Catalog.Text(page.Data["DEVICEOPERMODE_ALL"]["DEVICEOPERMODE"]?["MODE"])!="BRIDGE")
                     throw new InvalidOperationException("The first real HTTPS login/cookie/protected read failed.");
+                var enable=await first.PrepareWebUiExperimentAsync(true,token);
+                if(!(await first.ApplyWebUiExperimentAsync(enable,token)).StartsWith("Flag enabled and read back"))
+                    throw new InvalidOperationException("Native HTTPS browser enable/read-back failed.");
+                var disable=await first.PrepareWebUiExperimentAsync(false,token);
+                if(!(await first.ApplyWebUiExperimentAsync(disable,token)).StartsWith("Flag disabled and read back"))
+                    throw new InvalidOperationException("Native HTTPS browser disable/read-back failed.");
                 saved=first.Record; updatedPath=saved.Path;
                 if(saved.Address!=host || CredentialStore.Inspect(saved.Path).Address!=host)
                     throw new InvalidOperationException("Verified address override was not persisted.");
