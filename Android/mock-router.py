@@ -9,6 +9,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 class RouterFixture:
     def __init__(self, certificate, private_key):
         self.webui = "0"
+        self.lookup_source = "https://plt.surfboardconnect.com/manifest"
+        self.lookup_writes = 0
         self.webui_writes = 0
         self.logins = 0
         self.cookie = ''
@@ -55,6 +57,16 @@ class RouterFixture:
                         self.reply({'STATUS': 'SessionTimeout'})
                         return
                     request = json.loads(body)
+                    if 'UPDATE' in request.get('REQUEST', {}):
+                        address = ('http://10.0.2.15:8765/arris-lookup/0123456789abcdef0123456789abcdef/manifest'
+                                   if owner.lookup_writes == 0 else 'https://plt.surfboardconnect.com/manifest')
+                        expected = {'REQUEST': {'OPERTYPE': 'MODIFY', 'UPDATE': {'CONTAINER': 'Update', 'URL': address}}}
+                        if request != expected or owner.lookup_writes >= 2:
+                            raise AssertionError('Unexpected firmware action or lookup payload')
+                        owner.lookup_writes += 1
+                        owner.lookup_source = address
+                        self.reply({'STATUS': 'OK'})
+                        return
                     expected = {'REQUEST': {'OPERTYPE': 'MODIFY', 'LOGINCFG': {'WEBUIENABLE': '1' if owner.webui == '0' else '0'}}}
                     if request != expected:
                         raise AssertionError('Unexpected web-interface payload')
@@ -82,6 +94,11 @@ class RouterFixture:
                     self.reply({'STATUS': 'OK', 'LOGINCFG': {'WEBUIENABLE': owner.webui, 'SSOPASSWORD': 'FictionalSecret'}})
                 elif self.path == '/getData?key=DEVICESTATUS_ALL':
                     self.reply({'STATUS': 'OK', 'DEVICESTATUS': {'BOOTING': '0', 'SOFTWAREUPDATEACTIVE': '0'}})
+                elif self.path == '/getData?key=FIRMWARE_ALL':
+                    self.reply({'STATUS': 'OK', 'FIRMWARE': {'UPGRADE_SW': '0'}})
+                elif self.path == '/getData?key=UPDATE_ALL':
+                    self.reply({'STATUS': 'OK', 'UPDATE': {'URL': owner.lookup_source, 'STATUS': 'Unknown', 'PERCENTAGE': '0',
+                                                        'CURRENT_VERSION': 'AXR.0814.240522.10', 'UPGRADE_VERSION': 'AXR.0814.240522.10'}})
                 elif self.path == '/getData?key=DEVICEOPERMODE_ALL':
                     self.reply({'STATUS': 'OK', 'DEVICEOPERMODE': {'MODE': 'BRIDGE'}})
                 else:

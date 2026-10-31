@@ -1115,6 +1115,7 @@ public sealed partial class MainActivity : Activity
                 ShowRouter(); await Read();
             }, Tone.Danger);
         }
+        if (access) AddFirmwareLookupActions(card);
         var text = Label(report, 11, color: Palette.Text);
         text.SetTypeface(Android.Graphics.Typeface.Monospace, Android.Graphics.TypefaceStyle.Normal); text.SetTextIsSelectable(true);
         card.AddView(text);

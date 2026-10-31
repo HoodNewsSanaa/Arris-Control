@@ -272,6 +272,15 @@ internal static class Settings
         var root=JsonNode.Parse(body) as JsonObject;
         if(root?.Count!=1 || root["REQUEST"] is not JsonObject request || request.Count!=2)throw new RouterException("Unsupported settings payload.");
         var operation=Catalog.Text(request["OPERTYPE"]);var entry=request.FirstOrDefault(kv=>kv.Key!="OPERTYPE");
+        // Capture experiment only: no CHECKNOW, version, download or install fields.
+        if(entry.Key=="UPDATE")
+        {
+            if(operation!="MODIFY" || entry.Value is not JsonObject update || update.Count!=2 ||
+                Catalog.Text(update["CONTAINER"])!="Update" || update["URL"] is not JsonValue url ||
+                !url.TryGetValue<string>(out var source) || !FirmwareLookupPlan.AllowedSource(source))
+                throw new RouterException("Unsupported firmware lookup request.");
+            return;
+        }
         // The reviewed experiment has one exact payload; no login/password editor
         // or other LOGINCFG fields are admitted by the transport allowlist.
         if(entry.Key=="LOGINCFG")

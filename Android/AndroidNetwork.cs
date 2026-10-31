@@ -17,6 +17,20 @@ internal static class AndroidNetwork
             throw new RouterException("Connect this phone to the Arris Wi-Fi or its local Ethernet network first. If Android says there is no Internet, choose to stay connected. The app cannot repair Wi-Fi authentication or DHCP failures.");
     }
     public static void UseInternet() => Manager.BindProcessToNetwork(null);
+    public static IPAddress AddressForRouter(IPAddress router)
+    {
+        UseLocal();
+        var target = router.GetAddressBytes();
+        foreach (var a in Manager.GetLinkProperties(LocalNetwork!)?.LinkAddresses ?? [])
+        {
+            if (!IPAddress.TryParse(a.Address?.HostAddress, out var local) || !CredentialStore.IsPrivate(local.ToString()) ||
+                local.Equals(router) || a.PrefixLength is < 1 or > 30) continue;
+            var b = local.GetAddressBytes();
+            if (Enumerable.Range(0, a.PrefixLength).All(i => (b[i/8] & (128 >> (i%8))) == (target[i/8] & (128 >> (i%8)))))
+                return local;
+        }
+        throw new RouterException("The phone needs an IPv4 address on the selected router's local network.");
+    }
     public static string Status()
     {
         var network = LocalNetwork;

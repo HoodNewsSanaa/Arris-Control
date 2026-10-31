@@ -44,6 +44,14 @@ internal static class RouterNetworkSelfTests
                 var disable=await first.PrepareWebUiExperimentAsync(false,token);
                 if(!(await first.ApplyWebUiExperimentAsync(disable,token)).StartsWith("Flag disabled and read back"))
                     throw new InvalidOperationException("Native HTTPS browser disable/read-back failed.");
+                var lookup = await first.PrepareFirmwareLookupAsync("http://10.0.2.15:8765/arris-lookup/0123456789abcdef0123456789abcdef/manifest",token);
+                await first.StartFirmwareLookupAsync(lookup,token);
+                await first.RestoreFirmwareLookupAsync(lookup,token);
+                using(var recorderTest = CancellationTokenSource.CreateLinkedTokenSource(token))
+                {
+                    recorderTest.CancelAfter(TimeSpan.FromSeconds(15));
+                    await FirmwareLookupCaptureSelfTests.RunRecorderAsync(AndroidNetwork.AddressForRouter(System.Net.IPAddress.Parse(host)),recorderTest.Token);
+                }
                 saved=first.Record; updatedPath=saved.Path;
                 if(saved.Address!=host || CredentialStore.Inspect(saved.Path).Address!=host)
                     throw new InvalidOperationException("Verified address override was not persisted.");
