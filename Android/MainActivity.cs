@@ -80,6 +80,10 @@ public sealed partial class MainActivity : Activity
                     try { await RouterNetworkSelfTests.RunAsync(lifetime.Token); }
                     catch (Exception ex) { Android.Util.Log.Error("ArrisControlSelfTest", ex.ToString()); throw; }
                     ShowMeshRenderFixture();
+                    // SetContentView replaces the root: let Android measure it before capture.
+                    for(var layoutWait=0;root.Width<=0 && layoutWait<50;layoutWait++)
+                        await Task.Delay(100,lifetime.Token);
+                    if(root.Width<=0 || root.Height<=0)throw new InvalidOperationException("Mesh fixture did not finish layout.");
                     status.Text = "PASS: Android API scan, HTTPS login and reconnect.";
                     if (root.Width > 0 && root.Height > 0)
                     {

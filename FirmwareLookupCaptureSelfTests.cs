@@ -132,7 +132,7 @@ internal static class FirmwareLookupCaptureSelfTests
         using var recorder = new FirmwareLookupRecorder(local, local, 0);
         var saved = false;
         var receive = recorder.RecordAsync(_ => saved = true, token);
-        using var http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false, UseProxy = false });
+        using var http = new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false, UseProxy = false });
         using var response = await http.GetAsync(recorder.Address + "?model=W30&version=FICTIONAL", token);
         var result = await receive;
         Check((int)response.StatusCode == 503 && (await response.Content.ReadAsByteArrayAsync(token)).Length == 0 && saved && result is not null,
