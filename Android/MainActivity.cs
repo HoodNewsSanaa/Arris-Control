@@ -404,6 +404,7 @@ public sealed partial class MainActivity : Activity
         address.TextChanged += (_, _) => addressEdited = true;
         Action(local, "Find ARRIS routers on this Wi-Fi", ScanRouters);
         Action(local, "Use an existing local admin login", EnterLocalLogin);
+        Action(local, "WOBA · inspect or establish local admin", () => { ShowWobaStart(); return Task.CompletedTask; });
         Action(local, "Bluetooth setup and node diagnostics", SetupDiagnostics);
         local.AddView(Label("Offline factory setup and complete node pairing still need physical-router validation. A fresh unit may expose only Bluetooth.", 12));
         var cloudOptions = Card("Optional account access", "Only use this if you choose to acquire a credential through ARRIS. Local setup above does not contact ARRIS.");
@@ -681,6 +682,7 @@ public sealed partial class MainActivity : Activity
         {
             ble?.Dispose(); ble = new BleManager(this); await BleConnectAndInspect(device);
         });
+        Action(next, "Open WOBA local admin setup", () => { ShowWobaStart(); return Task.CompletedTask; });
         Action(next, "Record state for 3 minutes (read-only)", () => CaptureBleState(device), Tone.Primary);
         AddSavedBleCapture(next);
         Action(next, "Export Bluetooth activity log", () =>
@@ -867,10 +869,12 @@ public sealed partial class MainActivity : Activity
     {
         Shell("Verify offline setup"); backAction = BackToStart;
         var info = Card("Pending local login", draft.Device.ToString(), chipText: "Unverified", chipColor: Palette.Warning);
-        info.AddView(Label("Join “" + draft.Ssid + "” or connect to this router over Ethernet. Mobile data can be off. This page uses only the local API and needs no SURFboard reference or ARRIS account.", 14));
+        info.AddView(Label(draft.Source=="WOBA"
+            ? "Verify the proposed WOBA admin credential on the same local network. Wi-Fi settings were not changed. The recorded certificate key is required. No ARRIS connection is used."
+            : "Join “" + draft.Ssid + "” or connect to this router over Ethernet. Mobile data can be off. This page uses only the local API and needs no SURFboard reference or ARRIS account.", 14));
         Action(info, "Open Wi-Fi settings", () => { StartActivity(new Intent(Android.Provider.Settings.ActionWifiSettings)); return Task.CompletedTask; }, Tone.Primary);
         var verify = Card("Find and verify the router");
-        address = Input(verify, "Private IPv4 address", "192.168.7.1");
+        address = Input(verify, "Private IPv4 address", draft.Source=="WOBA"?draft.Address:"192.168.7.1");
         Action(verify, "Find this router on Wi-Fi and verify", async () =>
         {
             AndroidNetwork.UseLocal(); status.Text = "Looking for the pending router on this local network…";
@@ -886,8 +890,11 @@ public sealed partial class MainActivity : Activity
     async Task VerifyOfflineDraft(string path, OfflineSetupDraft draft, string target, string? pin)
     {
         status.Text = "Checking the proposed local login…"; AndroidNetwork.UseLocal();
-        var record = await CloudAcquisition.VerifyAndSaveAsync(new(draft.Credential, [draft.Device]), draft.Device, target, lifetime.Token, pin,
-            "User-confirmed experimental Bluetooth setup, then authenticated local serial/mode reads");
+        var expectedPin=draft.Source=="WOBA"?draft.Credential.CertificatePin:pin;
+        if(draft.Source=="WOBA" && !CertificatePin.IsValid(expectedPin))throw new RouterException("The pending WOBA credential has no valid certificate pin. No login was sent.");
+        if(draft.Source=="WOBA" && pin is not null && pin!=expectedPin)throw new RouterException("The discovered key differs from the pending WOBA credential. No login was sent.");
+        var record = await CloudAcquisition.VerifyAndSaveAsync(new(draft.Credential, [draft.Device]), draft.Device, target, lifetime.Token, expectedPin,
+            draft.Source=="WOBA"?"Local WOBA admin setup, then separately authenticated exact serial/mode and pinned certificate verification":"User-confirmed experimental Bluetooth setup, then authenticated local serial/mode reads");
         // A verified credential is safely stored before the pending record is removed.
         try { File.Delete(path); } catch (IOException) { }
         await Connect(record);

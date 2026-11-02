@@ -13,6 +13,9 @@ class RouterFixture:
         self.lookup_writes = 0
         self.webui_writes = 0
         self.logins = 0
+        self.woba_logins = 0
+        self.woba_writes = 0
+        self.woba_cookie = ''
         self.cookie = ''
         self.anonymous_reads = 0
         self.protected_reads = 0
@@ -24,20 +27,20 @@ class RouterFixture:
             def log_message(self, *_args):
                 pass
 
-            def reply(self, payload):
+            def reply(self, payload, cookie=None):
                 body = json.dumps({'RESPONSE': payload}).encode()
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
                 self.send_header('Content-Length', str(len(body)))
                 self.send_header('Connection', 'close')
-                if payload['STATUS'] == 'Login-OK':
-                    self.send_header('Set-Cookie', owner.cookie + '; Path=/; HttpOnly; Secure')
+                if cookie or payload['STATUS'] == 'Login-OK':
+                    self.send_header('Set-Cookie', (cookie or owner.cookie) + '; Path=/; HttpOnly; Secure')
                 self.end_headers()
                 self.wfile.write(body)
 
             def do_POST(self):
                 # Only login and the exact reviewed web-interface test are accepted.
-                if self.path not in ('/loginAction', '/setData'):
+                if self.path not in ('/loginAction', '/setData', '/woba_loginAction', '/woba_setData'):
                     raise AssertionError('Unexpected modifying request')
                 if 'chunked' in self.headers.get('Transfer-Encoding', '').lower():
                     chunks = []
@@ -52,6 +55,25 @@ class RouterFixture:
                     body = b''.join(chunks)
                 else:
                     body = self.rfile.read(int(self.headers.get('Content-Length', 0)))
+                if self.path == '/woba_loginAction':
+                    expected = base64.b64encode(b'maxadmin:maxpassword')
+                    if not body.startswith(b'arg=' + expected + b'&'):
+                        self.reply({'STATUS': 'IncorrectCredentials'})
+                        return
+                    owner.woba_logins += 1
+                    owner.woba_cookie = 'MOBAPPSESSID=fictional-woba-' + str(owner.woba_logins)
+                    self.reply({'STATUS': 'OK', 'OBASTATUS': '1'}, owner.woba_cookie)
+                    return
+                if self.path == '/woba_setData':
+                    if self.headers.get('Cookie') != owner.woba_cookie or not owner.woba_cookie:
+                        self.reply({'STATUS': 'SessionTimeout'})
+                        return
+                    expected = {'REQUEST': {'OPERTYPE': 'MODIFY', 'OB_LCAINFO': {'LCA_USERNAME': 'wobaadmin', 'LCA_PASSWORD': 'FictionalWOBAAdminPassword123!'}}}
+                    if json.loads(body) != expected or owner.woba_writes:
+                        raise AssertionError('Unexpected or repeated WOBA credential request')
+                    owner.woba_writes += 1
+                    self.reply({'STATUS': 'SUCCESS'})
+                    return
                 if self.path == '/setData':
                     if self.headers.get('Cookie') != owner.cookie or not owner.cookie:
                         self.reply({'STATUS': 'SessionTimeout'})
@@ -75,7 +97,7 @@ class RouterFixture:
                     self.reply({'STATUS': 'OK'})
                     return
                 expected = base64.b64encode(b'test%40example.com:FictionalLocalPassword123!')
-                if not body.startswith(b'arg=' + expected + b'&'):
+                if not body.startswith(b'arg=' + expected + b'&') and not (owner.woba_writes == 1 and body.startswith(b'arg=' + base64.b64encode(b'wobaadmin:FictionalWOBAAdminPassword123!') + b'&')):
                     self.reply({'STATUS': 'IncorrectCredentials'})
                     return
                 owner.logins += 1
@@ -83,6 +105,22 @@ class RouterFixture:
                 self.reply({'STATUS': 'Login-OK'})
 
             def do_GET(self):
+                if self.path.startswith('/woba_getData?key='):
+                    if self.headers.get('Cookie') != owner.woba_cookie or not owner.woba_cookie:
+                        self.reply({'STATUS': 'SessionTimeout'})
+                        return
+                    key = self.path.split('=', 1)[1]
+                    values = {
+                        'OB_DEVICEINFO_ALL': {'OB_DEVICEINFO': {'MAX_SERIAL_NO': 'TESTSERIAL123', 'MAX_WAN_MAC': '001122334455', 'MAX_MODEL_NO': 'WR11AXER1', 'DUID': 'MUST_NOT_RETAIN'}},
+                        'OB_DEVICEMODE_ALL': {'OB_DEVICEMODE': {'DEVICE_MODE': 'MAINAP'}},
+                        'OB_CAPABILITIES_ALL': {'CAPABILITIES': [{'MODEL': 'W30', 'FW_VERSION': 'AXR.0814.240522.10'}]},
+                        'OB_SWUPDATESTATUS_ALL': {'OB_SWUPDATESTATUS': {'UPGRADE_STATUS': 'LatestSoftwareInstalled', 'PROGRESS_PERCENTAGE': '0'}},
+                        'OB_WANSTATUS_ALL': {'OB_WANSTATUS': {'WAN_STATUS': 'Down'}},
+                        'OB_DEVICESTATUS_ALL': {'OB_DEVICESTATUS': {'MAINAP_STATE': 'Waiting', 'NUM_SATELLITES': '0'}},
+                        'OB_POSTRESET_SETTINGS_ALL': {'OB_POSTRESET_SETTINGS': {}}
+                    }
+                    self.reply({'STATUS': 'OK', **values[key]})
+                    return
                 if self.headers.get('Cookie') != owner.cookie or not owner.cookie:
                     owner.anonymous_reads += 1
                     self.reply({'STATUS': 'SessionTimeout'})

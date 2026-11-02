@@ -9,6 +9,31 @@ if (args is ["--probe", var address])
     return;
 }
 
+if (args is ["--discover", var host, var mask])
+{
+    using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(60));
+    var found=await RouterDiscovery.DiscoverApisAsync(RouterDiscovery.SubnetCandidates(host,mask),null,timeout.Token);
+    foreach(var endpoint in found)Console.WriteLine($"Local ARRIS API: {endpoint.Address} · key {endpoint.Fingerprint}");
+    Console.WriteLine($"{found.Count} matching local management API(s). No credentials or settings writes sent.");return;
+}
+
+if (args is ["--woba-probe", var localAddress])
+{
+    using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(90));
+    var endpoint=await RouterDiscovery.ProbeApiAsync(localAddress,timeout.Token)??throw new InvalidOperationException("No local ARRIS API with a valid device certificate answered.");
+    using var session=new WobaSession(endpoint);
+    try
+    {
+        var inspection=await session.InspectAsync(timeout.Token);
+        Console.WriteLine(WobaProtocol.Report(inspection));
+        Console.WriteLine("WOBA update status (nonsecret): "+System.Text.Json.JsonSerializer.Serialize(Catalog.Text(inspection.Data.GetValueOrDefault("OB_SWUPDATESTATUS_ALL")?["OB_SWUPDATESTATUS"]?["UPGRADE_STATUS"])));
+        Console.WriteLine("No settings write was sent.");
+    }
+    catch(RouterException error) when(error.Code=="LoginNotApplicable")
+    {Console.WriteLine("WOBA reports onboarding complete (LoginNotApplicable). No onboarding reads or settings writes were sent.");}
+    return;
+}
+
 if (args is ["--export-protocol", var reference, var output])
 {
     // For personal builds only: writes the SURFboard reference as plaintext JSON.

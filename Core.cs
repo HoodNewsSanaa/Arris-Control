@@ -229,12 +229,13 @@ internal interface IRouterWire : IDisposable
 }
 internal sealed class LocalWire : IRouterWire
 {
-    readonly HttpClient client;readonly Uri origin;string? cookie;readonly object gate=new();string? observedPin;
+    readonly HttpClient client;readonly Uri origin;readonly bool woba;string? cookie;readonly object gate=new();string? observedPin;
     /// <summary>Public-key pin of the certificate this connection accepted. With no expected pin
     /// (first verification), the first certificate seen is locked in for the wire's lifetime.</summary>
     public string? ObservedPin{get{lock(gate)return observedPin;}}
-    public LocalWire(CredentialRecord r,string? expectedPin=null)
+    public LocalWire(CredentialRecord r,string? expectedPin=null,bool woba=false)
     {
+        this.woba=woba;
         if(!CredentialStore.IsPrivate(r.Address))throw new RouterException("A private router IPv4 address is required.");
         if(expectedPin is not null && !CertificatePin.IsValid(expectedPin))throw new RouterException("Invalid router certificate pin.");
 #if ANDROID
@@ -257,13 +258,15 @@ internal sealed class LocalWire : IRouterWire
     public async Task<JsonObject> SendAsync(string path,string? body=null,CancellationToken token=default)
     {
         var allowed=body is null ? path.StartsWith("/getData?key=",StringComparison.Ordinal) && Catalog.ReadKeys.Contains(path[13..]) : path is "/loginAction" or "/setData";
+        if(woba)allowed=WobaProtocol.Allows(path,body);
         if(!allowed) throw new RouterException("Request is outside the fixed local management API.");
         if(path=="/setData") Settings.ValidateEnvelope(body!);
+        if(path==WobaProtocol.Set)WobaProtocol.ValidateBody(body!);
         using var request=new HttpRequestMessage(body is null ? HttpMethod.Get : HttpMethod.Post,new Uri(origin,path));
         if(cookie is not null)request.Headers.TryAddWithoutValidation("Cookie",cookie);
-        if(body is not null)request.Content=new StringContent(body,Encoding.UTF8,path=="/loginAction" ? "application/x-www-form-urlencoded" : "application/json");
+        if(body is not null)request.Content=new StringContent(body,Encoding.UTF8,path is "/loginAction" or WobaProtocol.Login ? "application/x-www-form-urlencoded" : "application/json");
         using var reply=await client.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,token);
-        if(path=="/loginAction" && reply.Headers.TryGetValues("Set-Cookie",out var cookies))
+        if((path is "/loginAction" or WobaProtocol.Login) && reply.Headers.TryGetValues("Set-Cookie",out var cookies))
             foreach(var value in cookies)
             {
                 var match=Regex.Match(value,@"(?:^|,\s*)MOBAPPSESSID=([^;\r\n]*)");
@@ -273,7 +276,7 @@ internal sealed class LocalWire : IRouterWire
         await using var input=await reply.Content.ReadAsStreamAsync(token);
         using var memory=new MemoryStream();var buffer=new byte[65536];int count;
         while((count=await input.ReadAsync(buffer,token))>0){if(memory.Length+count>8*1024*1024)throw new RouterException("Router response exceeded the display limit.");await memory.WriteAsync(buffer.AsMemory(0,count),token);}
-        return ParseResponse(memory.ToArray(),path=="/loginAction",path=="/setData");
+        return ParseResponse(memory.ToArray(),path is "/loginAction" or WobaProtocol.Login,path is "/setData" or WobaProtocol.Set);
     }
     internal static JsonObject ParseResponse(byte[] body,bool login=false,bool write=false)
     {

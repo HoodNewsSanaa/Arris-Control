@@ -18,7 +18,7 @@ internal sealed record BleSetupWrite(string Uuid, string Value)
 {
     public override string ToString() => $"Bluetooth setup write {Uuid[4..8]} (value withheld)";
 }
-internal sealed record OfflineSetupDraft(CloudDevice Device, RouterCredential Credential, string Ssid)
+internal sealed record OfflineSetupDraft(CloudDevice Device, RouterCredential Credential, string Ssid,string Source="Bluetooth",string Address="")
 {
     public override string ToString() => "Pending offline setup (values withheld)";
 }
@@ -192,7 +192,9 @@ internal static class OfflineSetupStore
             if (root.GetProperty("Format").GetString() != "ARRIS-OfflineSetup" || root.GetProperty("Version").GetInt32() != 1) throw new RouterException("Unsupported pending setup record.");
             plain = CredentialProtection.Unprotect(Convert.FromBase64String(root.GetProperty("Ciphertext").GetString()!), Entropy);
             var draft = JsonSerializer.Deserialize<OfflineSetupDraft>(plain) ?? throw new RouterException("Empty pending setup record.");
-            BleSetupProtocol.Validate(draft, "validation-only"); return draft;
+            BleSetupProtocol.Validate(draft, "validation-only");
+            if(draft.Source=="WOBA" && (!CredentialStore.IsPrivate(draft.Address)||!CertificatePin.IsValid(draft.Credential.CertificatePin)))throw new RouterException("Invalid WOBA recovery address or certificate pin.");
+            return draft;
         }
         catch (Exception ex) when (ex is CryptographicException or JsonException or FormatException or KeyNotFoundException)
         { throw new RouterException("This installation could not open the pending offline login."); }

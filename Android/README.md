@@ -39,6 +39,19 @@ Opening it and signing in explicitly contacts ARRIS. It is not part of local set
 The optional updater contacts GitHub only when requested or when automatic checks
 have been enabled by the user. Existing explicit update preferences are retained.
 
+### WOBA local admin setup
+
+**WOBA · inspect or establish local admin** opens the local onboarding API after
+Bluetooth/network bring-up. Inspect identity, role, WAN/onboarding state and
+firmware progress without normal admin credentials. A reviewed **OB_LCAINFO**
+request can establish the local admin credential on the inspected W30 build,
+followed by a separate normal login and protected identity/mode verification.
+An encrypted pending credential and original certificate pin are retained before
+the one write, so uncertain attempts can be verified after restart without
+repeating setup. Completed onboarding returns **LoginNotApplicable**; the app
+does not reset the router. W31 inspections are allowed but its credential-write
+path is not yet enabled. [WOBA scope and new capabilities](../docs/woba-local-admin.md).
+
 ### Triangle mesh view and adding nodes
 
 **Mesh and devices** draws up to eight known routers, with a triangle arrangement

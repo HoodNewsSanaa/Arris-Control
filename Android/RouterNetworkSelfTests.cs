@@ -23,7 +23,7 @@ internal static class RouterNetworkSelfTests
         var pin=endpoints[0].Pin;
         var directory=Path.Combine(Path.GetTempPath(),"router-network-test-"+Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
-        string? updatedPath=null, preservedPath=null, pinnedPath=null, legacyPreserved=null, offlinePath=null;
+        string? updatedPath=null, preservedPath=null, pinnedPath=null, legacyPreserved=null, offlinePath=null, wobaPath=null;
         try
         {
             var device=new CloudDevice("Fixture mAX","TESTSERIAL123",mac);
@@ -99,6 +99,20 @@ internal static class RouterNetworkSelfTests
                 !File.ReadAllText(verified.Path).Contains("Offline setup fixture"))
                 throw new InvalidOperationException("The pending offline login did not verify and pin its local router.");
             File.Delete(pending);
+            using(var woba=new WobaSession(endpoints[0]))
+            {
+                var inspection=await woba.InspectAsync(token);
+                if(inspection.Data.Values.Any(v=>v.ToJsonString().Contains("MUST_NOT_RETAIN")))throw new InvalidOperationException("WOBA retained a physical-access hash.");
+                var credential=new RouterCredential("wobaadmin","FictionalWOBAAdminPassword123!");
+                var plan=woba.Prepare(inspection,credential);
+                var recovery=await woba.ApplyAsync(plan,d=>OfflineSetupStore.Save(d,directory),token);
+                var pendingWoba=OfflineSetupStore.Load(recovery);
+                var wobaVerified=await CloudAcquisition.VerifyAndSaveAsync(new(pendingWoba.Credential,[pendingWoba.Device]),pendingWoba.Device,host,token,pendingWoba.Credential.CertificatePin,"WOBA fixture then independent normal login");
+                wobaPath=wobaVerified.Path;
+                if(CredentialStore.Load(wobaVerified,false).CertificatePin!=pin)throw new InvalidOperationException("WOBA verification lost its certificate pin.");
+                File.Delete(recovery);
+                Console.WriteLine("PASS: actual Android WOBA login/cookies, diagnostic projection, one OB_LCAINFO write, encrypted pending recovery and separately verified normal local login.");
+            }
             Console.WriteLine("PASS: anonymous scan with pin, native Android HTTPS login, cookie handling, verified address update, reconnect, impostor refusal, legacy pin upgrade and pending offline-login verification without cloud.");
         }
         finally
@@ -108,6 +122,7 @@ internal static class RouterNetworkSelfTests
             if(pinnedPath is not null && File.Exists(pinnedPath)) File.Delete(pinnedPath);
             if(legacyPreserved is not null && File.Exists(legacyPreserved)) File.Delete(legacyPreserved);
             if(offlinePath is not null && File.Exists(offlinePath)) File.Delete(offlinePath);
+            if(wobaPath is not null && File.Exists(wobaPath)) File.Delete(wobaPath);
             foreach(var path in Directory.EnumerateFiles(directory)) File.Delete(path);
             Directory.Delete(directory);
         }
