@@ -13,8 +13,9 @@ these in kbit/s, in AP-to-STA and STA-to-AP directions respectively:
 Proprietary TXRATE/RXRATE units are not inferred. A wired topology edge without a
 reported rate stays unknown, rather than assuming a gigabit negotiated speed.
 
-The triangle is a layout, not a fabricated full mesh. Lines appear only for reported
-edges. No physical distance is encoded. Three routers form a triangle; two stack;
+The triangle is a layout, not a fabricated full mesh. Solid lines appear only for reported
+edges. A dotted third side explicitly labeled Not reported is a layout guide,
+not a claimed backhaul connection. No physical distance is encoded. Three routers form a triangle; two stack;
 larger graphs use a ring. Eight nodes are drawn at most and all known nodes are
 available through accessible selection controls. All labels come from one timestamped
 read snapshot. A manual refresh replaces it; missing responses never reuse old rates.

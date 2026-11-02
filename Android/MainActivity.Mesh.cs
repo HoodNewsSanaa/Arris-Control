@@ -16,7 +16,7 @@ public sealed partial class MainActivity
         var diagram=new MeshMapView(this,topology,node=>selected.Text=node.Name+"\n"+topology.Describe(node));
         card.AddView(diagram,new LinearLayout.LayoutParams(-1,Dp(380)));
         card.AddView(selected);
-        card.AddView(Label("↓ Local AP → satellite   ↑ Satellite → local AP\nPHY link rates, not measured throughput. Missing links are not inferred. This snapshot does not refresh automatically.",12));
+        card.AddView(Label("↓ Local AP → satellite   ↑ Satellite → local AP\nPHY link rates, not measured throughput. A dotted triangle guide means no connection was reported. This snapshot does not refresh automatically.",12));
         foreach(var node in topology.Routers)
             Action(card,node.Name+(node.Controller?" · Main":" · Satellite"),()=>{diagram.Select(node);selected.Text=node.Name+"\n"+topology.Describe(node);return Task.CompletedTask;});
         if(previewRecord is null)Action(content,"Add a mesh node",()=>{ShowAddNode(snapshot);return Task.CompletedTask;},Tone.Primary);
@@ -62,6 +62,15 @@ public sealed partial class MainActivity
                 if(visible.Length<=3){x=visible.Length==2?.5f:i==0?.5f:i==1?.18f:.82f;y=i==0?.15f:.73f;}
                 else{var angle=-Math.PI/2+2*Math.PI*i/visible.Length;x=.5f+.35f*(float)Math.Cos(angle);y=.45f+.31f*(float)Math.Sin(angle);}
                 points.Add((visible[i],Width*x,Height*y));
+            }
+            // The third side of the approved triangle is a neutral guide, not a claimed link.
+            if(points.Count==3 && !mesh.Links.Any(l=>(l.Parent==points[1].Node.Id&&l.Child==points[2].Node.Id)||(l.Parent==points[2].Node.Id&&l.Child==points[1].Node.Id)))
+            {
+                var a=points[1];var b=points[2];paint.Color=Palette.SurfaceStroke;paint.StrokeWidth=owner.Dp(1);
+                using(var dash=new DashPathEffect([owner.Dp(4),owner.Dp(4)],0))
+                {paint.SetPathEffect(dash);canvas.DrawLine(a.X,a.Y,b.X,b.Y,paint);paint.SetPathEffect(null);}
+                var mx=(a.X+b.X)/2;paint.Color=Palette.Surface;canvas.DrawRect(mx-owner.Dp(53),a.Y-owner.Dp(13),mx+owner.Dp(53),a.Y+owner.Dp(13),paint);
+                Text(canvas,"Not reported",mx,a.Y+owner.Dp(4),11,Palette.Muted);
             }
             foreach(var link in mesh.Links)
             {
