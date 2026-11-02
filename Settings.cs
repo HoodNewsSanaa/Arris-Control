@@ -280,6 +280,12 @@ internal static class Settings
         var root=JsonNode.Parse(body) as JsonObject;
         if(root?.Count!=1 || root["REQUEST"] is not JsonObject request || request.Count!=2)throw new RouterException("Unsupported settings payload.");
         var operation=Catalog.Text(request["OPERTYPE"]);var entry=request.FirstOrDefault(kv=>kv.Key!="OPERTYPE");
+        if(entry.Key=="TURNOFFBLE")
+        {
+            if(operation!="MODIFY" || entry.Value is not JsonValue complete || !complete.TryGetValue<string>(out var value) || value!="1")
+                throw new RouterException("Unsupported local onboarding-completion request.");
+            return;
+        }
         // Capture experiment only: no CHECKNOW, version, download or install fields.
         if(entry.Key=="UPDATE")
         {

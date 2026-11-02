@@ -7,6 +7,12 @@ internal sealed record RouterStatusFact(string Value, string Detail, RouterStatu
 // Missing values must never become a healthy or completed state.
 internal static class RouterStatus
 {
+    public static RouterStatusFact BluetoothService(string raw, string source) => raw switch
+    {
+        "1" => new("Running", source + " · onboarding process present; phone Bluetooth visibility is separate"),
+        "0" => new("Stopped", source + " · onboarding process absent; normal admin access is independent", RouterStatusLevel.Attention),
+        _ => Unknown(raw, source)
+    };
     static RouterStatusFact Unknown(string raw, string source) => new("Unknown",
         source + (string.IsNullOrWhiteSpace(raw) ? " · no value returned" : " · reported: " + raw[..Math.Min(raw.Length, 120)]), RouterStatusLevel.Unknown);
     public static RouterStatusFact Role(string raw, string source) => raw.Trim().ToUpperInvariant() switch

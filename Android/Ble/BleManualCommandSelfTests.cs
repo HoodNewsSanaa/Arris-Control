@@ -48,61 +48,7 @@ internal static class BleManualCommandSelfTests
         await Refuse(() => new BleManualCommand(cancelled, new Dictionary<string, string>()).SendAsync("MAINAP", stop.Token));
         await Refuse(() => new BleManualCommand(cancelled, new Dictionary<string, string>()).SendAsync("INVALID", CancellationToken.None));
         Check(cancelled.Writes.Count == 0, "Cancellation/invalid command sent a write.");
-        await WobaCompletionChecksAsync();
         Console.WriteLine("PASS: one-shot manual MAINAP/EXTENDER/SETOBCOMPLETE bytes, incomplete identity/UPGRADING, stale-device refusal, cancellation and no retry after lost acknowledgement.");
-    }
-
-    static async Task WobaCompletionChecksAsync()
-    {
-        static void Check(bool value, string message) { if (!value) throw new InvalidOperationException(message); }
-        var before = new WobaInspection(new("W30", "TESTSERIAL123", "001122334455"), "192.168.7.1",
-            Convert.ToBase64String(new byte[32]), "MAINAP", "AXR.0814.240522.10", true,
-            new Dictionary<string, System.Text.Json.Nodes.JsonObject>
-            {
-                ["OB_SWUPDATESTATUS_ALL"] = System.Text.Json.Nodes.JsonNode.Parse("""{"OB_SWUPDATESTATUS":{"UPGRADE_STATUS":"LatestSoftwareInstalled","PROGRESS_PERCENTAGE":"0"}}""")!.AsObject()
-            }, [], DateTimeOffset.UtcNow, "1");
-        var wire = new Wire { Mode = "MAINAP" };
-        var refreshed = 0; var verified = 0;
-        var attempt = new WobaBleCompletion(wire, before);
-        Task<WobaInspection> Refresh(CancellationToken token) { refreshed++; return Task.FromResult(before); }
-        Task Verify(CancellationToken token) { verified++; Check(wire.Writes.Count == 0, "Completion ran before checking normal admin access."); return Task.CompletedTask; }
-        await attempt.SendAsync(Refresh, Verify, CancellationToken.None);
-        Check(refreshed == 1 && verified == 1 && wire.Writes.SequenceEqual(new[] { (BleSetupProtocol.Complete, BleSetupProtocol.CompleteValue) }), "WOBA completion did not send exactly the observed command after both checks.");
-        try { await attempt.SendAsync(Refresh, Verify, CancellationToken.None); throw new InvalidOperationException("WOBA completion repeated."); }
-        catch (RouterException) { }
-        Check(wire.Writes.Count == 1 && refreshed == 1, "The closed completion attempt was reused.");
-
-        foreach (var scenario in new[] { "normal-login", "changed-pin", "changed-identity", "changed-role", "changed-address", "busy", "complete", "bluetooth-serial", "bluetooth-mac", "cancel", "lost" })
-        {
-            var target = new Wire { Mode = "MAINAP" };
-            var fresh = before;
-            if (scenario == "changed-pin") fresh = fresh with { Pin = Convert.ToBase64String(Enumerable.Repeat((byte)1, 32).ToArray()) };
-            if (scenario == "changed-identity") fresh = fresh with { Device = before.Device with { Serial = "OTHERSERIAL123" } };
-            if (scenario == "changed-role") fresh = fresh with { Role = "EXTENDER" };
-            if (scenario == "changed-address") fresh = fresh with { Address = "192.168.7.2" };
-            if (scenario == "complete") fresh = fresh with { Incomplete = false, OnboardingStatus = "0" };
-            if (scenario == "busy") fresh = fresh with { Data = new Dictionary<string, System.Text.Json.Nodes.JsonObject>() };
-            if (scenario == "bluetooth-serial") target.Serial = "OTHERSERIAL123";
-            if (scenario == "bluetooth-mac") target.Mac = "001122334499";
-            if (scenario == "lost") target.FailWrite = true;
-            using var stop = new CancellationTokenSource();
-            if (scenario == "cancel") stop.Cancel();
-            var single = new WobaBleCompletion(target, before);
-            Task VerifyNormal(CancellationToken token) => scenario == "normal-login"
-                ? Task.FromException(new RouterException("Fictional failed admin login.")) : Task.CompletedTask;
-            for (var i = 0; i < 2; i++)
-            {
-                try
-                {
-                    await single.SendAsync(_ => Task.FromResult(fresh), VerifyNormal, stop.Token);
-                    throw new InvalidOperationException("Invalid WOBA completion allowed: " + scenario);
-                }
-                catch (RouterException) { }
-                catch (OperationCanceledException) { }
-            }
-            Check(target.Writes.Count == (scenario == "lost" ? 1 : 0), "Unexpected or repeated completion write: " + scenario);
-        }
-        Console.WriteLine("PASS: WOBA-to-Bluetooth completion requires fresh pinned identity, idle updates, verified normal admin login and matching Bluetooth identity; one command, cancellation and no uncertain-write retry.");
     }
 
     sealed class Wire : IBleSetupWire

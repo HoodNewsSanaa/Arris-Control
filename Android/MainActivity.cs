@@ -387,7 +387,7 @@ public sealed partial class MainActivity : Activity
         var lastAddress = prefs.GetString("address", records.FirstOrDefault()?.Address ?? "192.168.7.1")!;
         if (records.Count > 0)
         {
-            var saved = Card("Your routers", "Tap a router to connect or find its current address. Saved logins stay on this phone.",
+            var saved = Card("Your routers", "Use the saved normal admin login. It does not require onboarding mode or router Bluetooth. Tap a router to connect or find its current address.",
                 chipText: records.Count == 1 ? "Saved" : records.Count + " saved", chipColor: Palette.Success);
             foreach (var record in records) Action(saved, "Connect\n" + record.Serial, () => Connect(record, AddressOverride()), Tone.Primary);
         }
@@ -404,7 +404,7 @@ public sealed partial class MainActivity : Activity
         address.TextChanged += (_, _) => addressEdited = true;
         Action(local, "Find ARRIS routers on this Wi-Fi", ScanRouters);
         Action(local, "Use an existing local admin login", EnterLocalLogin);
-        Action(local, "WOBA · inspect or establish local admin", () => { ShowWobaStart(); return Task.CompletedTask; });
+        Action(local, "Initial admin setup / recovery · WOBA", () => { ShowWobaStart(); return Task.CompletedTask; });
         Action(local, "Bluetooth setup and node diagnostics", SetupDiagnostics);
         local.AddView(Label("Router searches and connections start only when you tap a button. Bluetooth tools are available without joining the router's Wi-Fi.", 13, color: Palette.Muted));
         local.AddView(Label("Offline factory setup and complete node pairing still need physical-router validation. A fresh unit may expose only Bluetooth.", 12));
@@ -598,6 +598,12 @@ public sealed partial class MainActivity : Activity
 
     async Task BleScanAndPick()
     {
+        var device = await PickBleDevice();
+        if (device is not null) await BleConnectAndInspect(device);
+    }
+
+    async Task<BleDevice?> PickBleDevice()
+    {
         if (!await EnsureBlePermissions())
             throw new RouterException("Bluetooth permission is needed to find a nearby router. You can grant it in Android Settings → Apps → Arris Control.");
         if (!MaxBle.Supported(this))
@@ -607,15 +613,16 @@ public sealed partial class MainActivity : Activity
         var devices = await ble.ScanAsync(TimeSpan.FromSeconds(7), lifetime.Token);
         if (devices.Count == 0)
         {
-            await Message("No Bluetooth devices", "No Bluetooth devices answered. A mAX router advertises over Bluetooth only during setup — power it on (or factory-reset it) and keep this phone close.");
-            return;
+            await Message("No Bluetooth devices", "No Bluetooth devices answered. Keep the phone near the new unit and check that its Bluetooth setup service is available. A configured controller may stop advertising; this does not prevent its normal local administration.");
+            return null;
         }
         var choice = await Choose("Nearby Bluetooth devices", devices.Select(d => d.ToString()).ToArray());
-        if (choice < 0) return;
-        await BleConnectAndInspect(devices[choice]);
+        return choice < 0 ? null : devices[choice];
     }
 
-    async Task BleConnectAndInspect(BleDevice device)
+    Task BleConnectAndInspect(BleDevice device) => BleConnectAndInspect(device, null);
+
+    async Task BleConnectAndInspect(BleDevice device, Func<BleRouterInspection, Task>? inspected)
     {
         status.Text = "Connecting over Bluetooth to " + (string.IsNullOrEmpty(device.Name) ? device.Address : device.Name) + "…";
         await ble!.ConnectAsync(device.Device, lifetime.Token);
@@ -654,6 +661,13 @@ public sealed partial class MainActivity : Activity
         string model = await ReadField(MaxBle.ModelNumber);
         string wan = await ReadField(MaxBle.WanStatus), obaState = await ReadField(MaxBle.ObaState);
         string upgrade = await ReadField(MaxBle.UpgradeStatus), download = await ReadField(MaxBle.DownloadProgress);
+
+        if (inspected is not null)
+        {
+            await inspected(new(appName, mode, serial.Trim().ToUpperInvariant(), BleSetupProtocol.NormalizeMac(mac), model,
+                obaState, wan, upgrade, download, errors));
+            return;
+        }
 
         Shell("Router over Bluetooth"); backAction = BackToStart;
         ShowBluetoothStatus(mode, obaState, wan, upgrade, download, errors);

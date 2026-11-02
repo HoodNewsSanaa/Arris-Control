@@ -54,9 +54,20 @@ Old records remain intact. Legacy pending Bluetooth records retain compatibility
 
 ## What this does not establish
 
-### Android 0.4.3: completion from WOBA
+### Android 0.4.4: local completion without phone Bluetooth
 
-The WOBA inspection screen has a **Finish onboarding…** action.
+The WOBA and normal Overview screens now open a normal-admin completion/status
+screen. It reads OBASTATUS and BLESTATUS through a fresh local login. The known
+local completion request does not need a phone Bluetooth connection, but does
+require the router's onboarding process to be present. If that process is absent,
+completion is reported unavailable while normal settings remain accessible.
+Success requires a fresh normal login with explicit OBASTATUS=0. See
+[the 0.4.4 protocol and validation notes](android-0.4.4-changes.md).
+
+### Historical Android 0.4.3 Bluetooth completion path
+
+Android 0.4.3 exposed a **Finish onboarding…** Bluetooth action, replaced in
+0.4.4 because configured routers may no longer expose that Bluetooth interface.
 It first verifies a saved normal admin login against the inspected certificate,
 then lets the user select the nearby Bluetooth unit. Serial and WAN MAC are
 matched automatically; no serial entry is requested. After confirmation it

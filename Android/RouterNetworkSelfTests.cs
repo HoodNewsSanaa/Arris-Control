@@ -120,6 +120,17 @@ internal static class RouterNetworkSelfTests
                 if(CredentialStore.Load(wobaVerified,false).CertificatePin!=pin)throw new InvalidOperationException("WOBA verification lost its certificate pin.");
                 File.Delete(recovery);
                 Console.WriteLine("PASS: actual Android WOBA login/cookies, diagnostic projection, one OB_LCAINFO write, encrypted pending recovery and separately verified normal local login.");
+                using(var normal=new RouterClient(wobaVerified))
+                {
+                    var finish=await normal.PrepareLocalCompletionAsync(token);
+                    var completed=await normal.ApplyLocalCompletionAsync(finish,token);
+                    if(!completed.Complete || completed.State?.BluetoothService!="0" || completed.State.Onboarding!="0")
+                        throw new InvalidOperationException("Local completion did not verify its fresh normal-login flags.");
+                    var managed=await normal.ReadPageAsync(new Page("after-setup","After setup","",["DEVICEOPERMODE_ALL"]),token);
+                    if(!managed.Reads.Single().Readable || normal.RoutingMode!="BRIDGE" || CredentialStore.Load(wobaVerified,false).CertificatePin!=pin)
+                        throw new InvalidOperationException("Normal bridge-mode management or the saved pin was lost after onboarding completed.");
+                    Console.WriteLine("PASS: actual Android local completion over normal HTTPS, one fixed request, fresh OBASTATUS=0/BLESTATUS=0 verification and continued normal bridge-mode admin access.");
+                }
             }
             Console.WriteLine("PASS: anonymous scan with pin, native Android HTTPS login, cookie handling, verified address update, reconnect, impostor refusal, legacy pin upgrade and pending offline-login verification without cloud.");
         }

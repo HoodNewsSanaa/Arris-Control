@@ -4,37 +4,6 @@ namespace ArrisControl;
 
 internal sealed record BleManualResult(string ReadBack, bool ReadBackAvailable);
 
-// WOBA supplies the pinned identity and update state; completion itself uses
-// the observed Bluetooth command. A normal saved login must work first.
-internal sealed class WobaBleCompletion(IBleSetupWire wire, WobaInspection expected)
-{
-    int used;
-    public async Task<BleManualResult> SendAsync(
-        Func<CancellationToken, Task<WobaInspection>> refresh,
-        Func<CancellationToken, Task> verifyNormalAdmin, CancellationToken token)
-    {
-        if (Interlocked.Exchange(ref used, 1) != 0)
-            throw new RouterException("This completion attempt is closed. Check its result before starting another attempt.");
-        token.ThrowIfCancellationRequested();
-        WobaSession.CheckWritable(expected);
-        var fresh = await refresh(token);
-        WobaSession.CheckWritable(fresh);
-        if (fresh.Device != expected.Device || fresh.Role != expected.Role || fresh.Firmware != expected.Firmware ||
-            fresh.Address != expected.Address || fresh.Pin != expected.Pin)
-            throw new RouterException("The selected router changed since inspection. No completion command was sent.");
-        await verifyNormalAdmin(token);
-        token.ThrowIfCancellationRequested();
-        var identity = new Dictionary<string, string>
-        {
-            [BlePrimaryInitialization.AppName] = "maxrouter",
-            [BlePrimaryInitialization.Mode] = expected.Role,
-            [BleSetupProtocol.Serial] = expected.Device.Serial,
-            [BleSetupProtocol.Mac] = expected.Device.Mac
-        };
-        return await new BleManualCommand(wire, identity).SendAsync(BleSetupProtocol.CompleteValue, token);
-    }
-}
-
 // A manual experiment, deliberately separate from guided provisioning. It
 // sends exactly one observed command and never claims onboarding succeeded.
 internal sealed class BleManualCommand(IBleSetupWire wire, IReadOnlyDictionary<string, string> expected)

@@ -33,6 +33,21 @@ internal static class MeshTopologySelfTests
         var rejected=false;try{Settings.Prepare(discovery,"AUTO_WOBA",baseline,new(){["TIMEOUT"]="3601"});}catch(RouterException){rejected=true;}
         Check(rejected,"Unbounded discovery timeout accepted.");
         Check(Catalog.Text(LocalWire.ParseResponse(Encoding.UTF8.GetBytes("{\"RESPONSE\":{\"STATUS\":\"SUCCESS\"}}"),write:true)["STATUS"])=="SUCCESS","Vendor write acknowledgement rejected.");
+        var target=new CloudDevice("W30","SATELLITE001","001122334466");
+        var selectedAt=DateTimeOffset.UtcNow.AddMinutes(-1);
+        Snapshot WithReads(Snapshot value)=>value with{Reads=value.Data.Keys.Select(k=>new ReadResult(k,200,"OK",value.Time,true)).ToList()};
+        var joined=WithReads(Fixture());
+        Check(SatelliteJoin.Verify(joined,record,target,selectedAt).Joined,"Fresh matching topology/backhaul did not verify the selected satellite.");
+        Check(!SatelliteJoin.Verify(WithReads(Fixture(false)),record,target,selectedAt).Joined,"Discovery plus an association was mistaken for joined topology.");
+        var inactive=WithReads(Fixture());inactive.Data["LINKSPEEDBH_ALL"]["LINKSPEEDBH"]![0]!["ACTIVE"]="false";
+        Check(!SatelliteJoin.Verify(inactive,record,target,selectedAt).Joined,"Inactive backhaul was shown as verified.");
+        var clientOnly=WithReads(Fixture());clientOnly.Data["NETWORKMAP_ALL"]["HNC"]!["children"]![0]!["children"]![0]!["data"]!["deviceType"]="client";
+        Check(!SatelliteJoin.Verify(clientOnly,record,target,selectedAt).Joined,"A client node became a verified satellite.");
+        Check(!SatelliteJoin.Verify(joined,record,target,DateTimeOffset.UtcNow.AddMinutes(1)).Joined,"A stale snapshot verified a newly selected satellite.");
+        Check(!SatelliteJoin.Verify(joined with{Reads=[]},record,target,selectedAt).Joined,"Unread/unavailable topology was treated as confirmed.");
+        Check(!SatelliteJoin.Verify(joined,record,new("W30",record.Serial,record.Mac),selectedAt).Joined,"The controller was selected as its own new satellite.");
+        var conflict=WithReads(Fixture());conflict.Data["AUTO_WOBA_SAT_STATUS_ALL"]["AUTO_WOBA_SAT_STATUS"]!["SAT_LIST"]![0]!["MAX_WAN_MAC"]="001122334499";
+        Check(!SatelliteJoin.Verify(conflict,record,target,selectedAt).Joined,"Conflicting identity verified a satellite.");
         rejected=false;try{LocalWire.ParseResponse(Encoding.UTF8.GetBytes("{\"RESPONSE\":{\"STATUS\":\"SUCCESS\"}}"));}catch(RouterException){rejected=true;}Check(rejected,"Write-only acknowledgement accepted as a protected read.");
         Console.WriteLine("PASS: mesh identity correlation, client exclusion, unknown/ambiguous links, kbps conversion, discovery aliases/bounds and write-only acknowledgement. No network requests.");
         using(var wire=new DiscoveryWire())using(var client=new RouterClient(record,wire))

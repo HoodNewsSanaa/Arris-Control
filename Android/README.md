@@ -42,6 +42,14 @@ have been enabled by the user. Existing explicit update preferences are retained
 
 ### WOBA local admin setup
 
+Android 0.4.4 labels WOBA as **Initial admin setup / recovery**. Saved normal
+admin credentials remain the ongoing connection path independently of the
+onboarding flag. **Check or finish onboarding locally** reads fresh completion
+and service flags over the normal API. Its reviewed completion request needs
+the router's onboarding process, but no phone Bluetooth connection. If that
+process is stopped, the app explains the limit and leaves normal settings usable.
+See [0.4.4 details](../docs/android-0.4.4-changes.md).
+
 **WOBA · inspect or establish local admin** opens the local onboarding API after
 Bluetooth/network bring-up. Inspect identity, role, WAN/onboarding state and
 firmware progress without normal admin credentials. A reviewed **OB_LCAINFO**

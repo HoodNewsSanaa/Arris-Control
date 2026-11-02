@@ -15,6 +15,9 @@ class RouterFixture:
         self.logins = 0
         self.woba_logins = 0
         self.woba_writes = 0
+        self.completion_writes = 0
+        self.onboarding = '1'
+        self.ble_service = '1'
         self.woba_cookie = ''
         self.cookie = ''
         self.anonymous_reads = 0
@@ -56,13 +59,16 @@ class RouterFixture:
                 else:
                     body = self.rfile.read(int(self.headers.get('Content-Length', 0)))
                 if self.path == '/woba_loginAction':
+                    if owner.onboarding == '0':
+                        self.reply({'STATUS': 'LoginNotApplicable'})
+                        return
                     expected = base64.b64encode(b'maxadmin:maxpassword')
                     if not body.startswith(b'arg=' + expected + b'&'):
                         self.reply({'STATUS': 'IncorrectCredentials'})
                         return
                     owner.woba_logins += 1
                     owner.woba_cookie = 'MOBAPPSESSID=fictional-woba-' + str(owner.woba_logins)
-                    self.reply({'STATUS': 'OK', 'OBASTATUS': '1'}, owner.woba_cookie)
+                    self.reply({'STATUS': 'OK', 'OBASTATUS': owner.onboarding, 'BLESTATUS': owner.ble_service}, owner.woba_cookie)
                     return
                 if self.path == '/woba_setData':
                     if self.headers.get('Cookie') != owner.woba_cookie or not owner.woba_cookie:
@@ -79,6 +85,14 @@ class RouterFixture:
                         self.reply({'STATUS': 'SessionTimeout'})
                         return
                     request = json.loads(body)
+                    if 'TURNOFFBLE' in request.get('REQUEST', {}):
+                        if request != {'REQUEST': {'OPERTYPE': 'MODIFY', 'TURNOFFBLE': '1'}} or owner.completion_writes or owner.ble_service != '1':
+                            raise AssertionError('Unexpected, unavailable or repeated completion request')
+                        owner.completion_writes += 1
+                        owner.onboarding = '0'
+                        owner.ble_service = '0'
+                        self.reply({'STATUS': 'SUCCESS'})
+                        return
                     if 'UPDATE' in request.get('REQUEST', {}):
                         address = ('http://10.0.2.15:8765/arris-lookup/0123456789abcdef0123456789abcdef/manifest'
                                    if owner.lookup_writes == 0 else 'https://plt.surfboardconnect.com/manifest')
@@ -102,7 +116,7 @@ class RouterFixture:
                     return
                 owner.logins += 1
                 owner.cookie = 'MOBAPPSESSID=fictional-session-' + str(owner.logins)
-                self.reply({'STATUS': 'Login-OK', 'OBASTATUS': '1'})
+                self.reply({'STATUS': 'Login-OK', 'OBASTATUS': owner.onboarding, 'BLESTATUS': owner.ble_service})
 
             def do_GET(self):
                 if self.path.startswith('/woba_getData?key='):

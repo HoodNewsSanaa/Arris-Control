@@ -41,6 +41,16 @@ internal static class CertificatePin
     public static string Compute(X509Certificate2 certificate)=>
         Convert.ToBase64String(SHA256.HashData(certificate.PublicKey.ExportSubjectPublicKeyInfo()));
     public static bool IsValid(string? pin)=>pin is not null && Regex.IsMatch(pin,"^[A-Za-z0-9+/]{43}=$");
+    internal static string? ForReconnect(string? saved, string? observed)
+    {
+        if(saved is not null && !IsValid(saved) || observed is not null && !IsValid(observed))
+            throw new RouterException("Invalid router certificate pin. No login was sent.");
+        if(saved is not null && observed is not null && saved!=observed)
+            throw new RouterException("The saved certificate key changed during this session. Select and verify the router again. No login was sent.");
+        // A legacy record may remain unpinned if its upgrade could not be saved.
+        // Never forget the key already verified by this live client on reconnect.
+        return saved??observed;
+    }
     /// <summary>MAC CN and validity dates; when a pin is known, also an exact public-key match.</summary>
     public static bool Accepts(X509Certificate2 certificate,string mac,string? pin,DateTime now)
     {
@@ -296,8 +306,10 @@ internal sealed partial class RouterClient : IDisposable
     public bool IsConnected=>authenticated;
     internal string? SessionPin=>pin;
     public string OnboardingStatus{get;private set;}="";
+    public string BluetoothServiceStatus{get;private set;}="";
     public string RoutingMode{get;private set;}="";
     public string Model{get;private set;}="";
+    public string HardwareVersion{get;private set;}="";
     public string FirmwareVersion{get;private set;}="";
     public DateTimeOffset? LoginObservedAt{get;private set;}
     public Action<string>? Progress {get;set;}
@@ -331,14 +343,14 @@ internal sealed partial class RouterClient : IDisposable
         var previous=CredentialStore.Inspect(record.Path);
         if(previous.Serial!=record.Serial || previous.Mac!=record.Mac)throw new RouterException("Credential identity changed during discovery.");
         // The pin comes from the encrypted payload, never from editable record metadata.
-        var credential=CredentialStore.Load(previous);pin=credential.CertificatePin;
+        var credential=CredentialStore.Load(previous);pin=CertificatePin.ForReconnect(credential.CertificatePin,pin);
         Progress?.Invoke(pin is null?"Checking the saved router address (certificate not yet pinned)…":"Locating the selected router on local networks…");
         var address=await RouterDiscovery.ResolveAsync(record,pin,token);
         wire.Dispose();var local=new LocalWire(record with{Address=address},pin);wire=local;
         Progress?.Invoke("Verifying local router identity at "+address+"…");
-        OnboardingStatus="";LoginObservedAt=null;
+        OnboardingStatus="";BluetoothServiceStatus="";LoginObservedAt=null;
         var login=await wire.SendAsync("/loginAction",LoginBody(credential.UserName,credential.Password,"abcxyz123_windows_"+Guid.NewGuid().ToString("N"),DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()),token);
-        OnboardingStatus=Catalog.Text(login["OBASTATUS"]);LoginObservedAt=DateTimeOffset.Now;
+        OnboardingStatus=Catalog.Text(login["OBASTATUS"]);BluetoothServiceStatus=Catalog.Text(login["BLESTATUS"]);LoginObservedAt=DateTimeOffset.Now;
         await VerifyIdentityAsync(token);_ = await ReadAsync("DEVICEOPERMODE_ALL",token);authenticated=true;
         record=record with{Address=address};
         try
@@ -363,6 +375,7 @@ internal sealed partial class RouterClient : IDisposable
         var info=await ReadAsync("DEVICE_INFO_ALL",token);
         if(Catalog.Text(info["DEVICE_INFO"]?["SERIAL_KEY"])!=record.Serial)throw new RouterException("The returned router serial does not match the selected credential. No setting was changed.");
         Model=Catalog.Text(info["DEVICE_INFO"]?["MODEL_NAME"]);
+        HardwareVersion=Catalog.Text(info["DEVICE_INFO"]?["HARDWARE_VERSION"]);
         FirmwareVersion=Catalog.Text(info["DEVICE_INFO"]?["SOFTWARE_VERSION"]);
     }
     public async Task ReconnectAsync(CancellationToken token=default)

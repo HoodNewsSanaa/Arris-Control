@@ -11,7 +11,7 @@ public sealed partial class MainActivity
         var previous=selectedAddress??address?.Text?.Trim()??"192.168.7.1";
         client?.Dispose();client=null;acquired=null;
         Shell("WOBA local setup");backAction=BackToStart;
-        var intro=Card("Local onboarding access","Use this after Bluetooth bring-up makes the local HTTPS API reachable. WOBA needs incomplete onboarding. This does not reset a configured router, install root or contact ARRIS.");
+        var intro=Card("Initial local admin access","Use WOBA to establish a local admin login while onboarding is incomplete and the local API is reachable. Once saved, use the normal admin login for ongoing settings, including after onboarding completes. This flow does not contact ARRIS.");
         var target=Input(intro,"Router IPv4 address",previous);
         var knownPins=new Dictionary<string,string>(scannedPins,StringComparer.Ordinal);
         Action(intro,"Find routers on this Wi-Fi",async()=>

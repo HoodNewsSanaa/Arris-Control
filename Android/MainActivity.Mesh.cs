@@ -8,6 +8,17 @@ using Color=Android.Graphics.Color;
 namespace ArrisControl;
 public sealed partial class MainActivity
 {
+    sealed class SatelliteSetupState(CredentialRecord controller, string? pin)
+    {
+        public CredentialRecord Controller = controller;
+        public string? Pin = pin;
+        public BleRouterInspection? Inspection;
+        public CloudDevice? Target;
+        public string? IdentityError;
+        public DateTimeOffset SelectedAt;
+        public SatelliteJoinResult? Result;
+    }
+    SatelliteSetupState? satelliteSetup;
     void ShowMesh(Snapshot snapshot,CredentialRecord? previewRecord=null)
     {
         var topology=MeshTopology.Parse(snapshot,previewRecord??client!.Record);
@@ -23,14 +34,88 @@ public sealed partial class MainActivity
     }
     void ShowAddNode(Snapshot snapshot)
     {
+        var controller = client!.Record;
+        if (satelliteSetup is null || satelliteSetup.Controller.Serial != controller.Serial ||
+            satelliteSetup.Controller.Mac != controller.Mac || satelliteSetup.Pin != client.SessionPin)
+            satelliteSetup = new(controller, client.SessionPin);
+        var setup = satelliteSetup;
         Shell("Add a mesh node");backAction=async()=>{currentPage=Catalog.Pages.First(p=>p.Id=="mesh");ShowRouter();await Read();};
-        var intro=Card("Local node setup","Use Bluetooth to identify the new unit, then enable discovery on the authenticated main router and monitor its topology. No ARRIS account is used by these actions.");
-        intro.AddView(Label("Full offline pairing is still unverified. Selecting EXTENDER does not by itself pair a node; a Bluetooth acknowledgement or discovery setting is not a joined-node result.",14));
-        Action(intro,"1 · Find and inspect the node over Bluetooth",BleScanAndPick,Tone.Primary);
+        var intro=Card("Controller stays connected locally", controller.Address + " · " + controller.Serial);
+        StatusRow(intro, "Controller onboarding", RouterStatus.Onboarding(client.OnboardingStatus, "Normal local login"));
+        StatusRow(intro, "Controller onboarding service", RouterStatus.BluetoothService(client.BluetoothServiceStatus, "Normal local login"));
+        intro.AddView(Label("The controller uses Wi-Fi/Ethernet administration throughout. Its Bluetooth service does not need to advertise. The phone uses Bluetooth only to inspect the new satellite. An incomplete controller flag does not block these inspection/discovery controls; pairing on that firmware state remains unverified.",14));
+        Action(intro,"1 · Inspect the new satellite over Bluetooth",async()=>
+        {
+            var device = await PickBleDevice();
+            if (device is null) return;
+            try
+            {
+                await BleConnectAndInspect(device, inspection =>
+                {
+                    setup.Inspection = inspection; setup.Target = null; setup.Result = null; setup.IdentityError = null;
+                    try
+                    {
+                        if (!inspection.Application.Trim().Equals("maxrouter", StringComparison.OrdinalIgnoreCase))
+                            throw new RouterException("The selected unit did not identify itself as maxrouter.");
+                        var target = new CloudDevice(inspection.Model, inspection.Serial, inspection.Mac);
+                        BleSetupProtocol.ValidateIdentity(target);
+                        if (target.Serial == controller.Serial || target.Mac == controller.Mac)
+                            throw new RouterException("That is the connected controller. Select the new satellite instead.");
+                        setup.Target = target; setup.SelectedAt = DateTimeOffset.UtcNow;
+                    }
+                    catch (RouterException ex) { setup.IdentityError = ex.Message; }
+                    ShowAddNode(snapshot); return Task.CompletedTask;
+                });
+            }
+            finally { ble?.Dispose(); ble = null; }
+        },Tone.Primary);
+        if (setup.Inspection is { } reading)
+        {
+            var node = Card("Selected satellite", setup.Target?.ToString() ?? "Identity unavailable");
+            StatusRow(node, "New unit role", RouterStatus.Role(reading.Role, "Bluetooth inspection"));
+            StatusRow(node, "New unit setup state", RouterStatus.BluetoothSetup(reading.Setup, "Bluetooth inspection"));
+            if (setup.IdentityError is not null) node.AddView(Label(setup.IdentityError + " Automatic join verification needs readable serial and WAN MAC; they are not guessed from the advertisement.",14,color:Palette.Warning));
+            foreach (var error in reading.Errors) node.AddView(Label(MaxBle.Short(error.Key) + ": " + error.Value,12,color:Palette.Warning));
+            Action(node,"View Bluetooth diagnostic log",()=>{ShowReport("Satellite Bluetooth diagnostics","Serial/MAC values are withheld in this log.",BleLog.Export());return Task.CompletedTask;});
+        }
+        var discovery = Card("2 · Controller discovery", "Open the controller's local discovery window. This does not supply backhaul credentials, complete satellite provisioning, or prove a node joined.");
         var section=Settings.Sections(snapshot).FirstOrDefault(s=>s.Container=="AUTO_WOBA");
-        if(section is not null){content.AddView(Label("2 · Review the controller discovery window",20,true));Editor(section);}
-        else content.AddView(Label("The main router did not return its local discovery controls. Inspect its capabilities; no pairing command has been guessed.",14));
-        Action(content,"3 · Refresh joined-node topology",async()=>{ble?.Dispose();ble=null;currentPage=Catalog.Pages.First(p=>p.Id=="mesh");ShowRouter();await Read();},Tone.Primary);
+        if(section is not null)
+        {
+            discovery.AddView(Label("Reported discovery: " + (Catalog.Text(section.Baseline["ENABLE"])=="1"?"Enabled":"Off or unknown"),14));
+            Action(discovery,"Review opening discovery for 3 minutes",async()=>
+            {
+                var fresh = await client.ReadPageAsync(Catalog.Pages.First(p=>p.Id=="mesh"),lifetime.Token);
+                var current = Settings.Sections(fresh).FirstOrDefault(s=>s.Container=="AUTO_WOBA")
+                    ?? throw new RouterException("The controller did not return its discovery controls. Nothing was changed.");
+                var plan = await client.PrepareAsync(current,new(){["ENABLE"]="1",["TIMEOUT"]="180"},token:lifetime.Token);
+                if(!await Confirm("Open controller discovery?",plan.Preview,"Open discovery once"))return;
+                var result = await client.ApplyAsync(plan,lifetime.Token);
+                await Message("Controller discovery",result);
+                ShowAddNode(await client.ReadPageAsync(Catalog.Pages.First(p=>p.Id=="mesh"),lifetime.Token));
+            });
+        }
+        else discovery.AddView(Label("The controller did not return discovery controls. Refresh its status to see the read result. No pairing command is guessed.",14));
+        var verification = Card("3 · Verify the selected satellite", "A verified result requires a fresh network-map entry and a matching active backhaul association. Wired backhaul without a reported active association remains unverified.");
+        if(setup.Target is not null)
+            Action(verification,"Check selected satellite on the local network",async()=>
+            {
+                var fresh=await client.ReadPageAsync(Catalog.Pages.First(p=>p.Id=="mesh"),lifetime.Token);
+                setup.Result=SatelliteJoin.Verify(fresh,client.Record,setup.Target,setup.SelectedAt);
+                ShowAddNode(fresh);
+            },Tone.Primary);
+        else verification.AddView(Label("Inspect and identify the new satellite first.",14));
+        if(setup.Result is { } checkedJoin)
+        {
+            verification.AddView(Label(checkedJoin.State,20,true,color:checkedJoin.Joined?Palette.Success:Palette.Warning));
+            verification.AddView(Label(checkedJoin.Detail,14));
+        }
+        Action(content,"Refresh controller flags and discovery status",async()=>
+        {
+            await client.ReconnectAsync(lifetime.Token);
+            ShowAddNode(await client.ReadPageAsync(Catalog.Pages.First(p=>p.Id=="mesh"),lifetime.Token));
+        });
+        content.AddView(Label("Full offline satellite provisioning remains unverified. No controller Bluetooth connection, role reassignment, cloud configuration or backhaul-password write is performed by this screen.",12,color:Palette.Muted));
         Action(content,"Back to mesh",backAction!);
     }
     void ShowMeshRenderFixture()

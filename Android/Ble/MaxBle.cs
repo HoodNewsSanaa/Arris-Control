@@ -75,6 +75,9 @@ internal sealed record BleDevice(string Name, string Address, int Rssi, Bluetoot
     public override string ToString() => $"{(string.IsNullOrEmpty(Name) ? "(unnamed)" : Name)}\n{Address} · {Rssi} dBm";
 }
 
+internal sealed record BleRouterInspection(string Application, string Role, string Serial, string Mac, string Model,
+    string Setup, string Wan, string Upgrade, string Download, IReadOnlyDictionary<string, string> Errors);
+
 /// <summary>
 /// Minimal, strictly-serial GATT client: one scan, one connection, one in-flight
 /// read/write at a time. Every operation has a timeout and never retries on its own.

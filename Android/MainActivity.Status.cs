@@ -31,6 +31,7 @@ public sealed partial class MainActivity
         StatusRow(card, "Routing mode", RouterStatus.Routing(current.RoutingMode, "Normal local API"));
         var loginSource = current.LoginObservedAt is { } checkedAt ? "Normal login · " + checkedAt.ToString("HH:mm:ss") : "Normal login · not reported";
         StatusRow(card, "Onboarding", RouterStatus.Onboarding(current.OnboardingStatus, loginSource));
+        StatusRow(card, "Router onboarding service", RouterStatus.BluetoothService(current.BluetoothServiceStatus, loginSource));
         var prior = lastWobaStatus;
         var pin = current.SessionPin;
         if (prior is not null && prior.Device.Serial == current.Record.Serial && prior.Device.Mac == current.Record.Mac && prior.Pin == pin)
@@ -56,12 +57,7 @@ public sealed partial class MainActivity
             await current.ReconnectAsync(lifetime.Token);
             ShowRouter(); await Read();
         });
-        Action(card, "Inspect setup / finish onboarding", () =>
-        {
-            var target = current.Record.Address;
-            if (CertificatePin.IsValid(pin)) scannedPins[target] = pin!;
-            ShowWobaStart(target); return Task.CompletedTask;
-        });
+        Action(card, "Check or finish onboarding locally", () => ShowLocalOnboarding(current.Record));
         Action(card, "Inspect status over Bluetooth", BleScanAndPick);
     }
 
@@ -72,6 +68,7 @@ public sealed partial class MainActivity
         var card = Card("Router status", "Onboarding inspection is separate from a normal authenticated admin session.");
         StatusRow(card, "Mesh role", RouterStatus.Role(inspection.Role, source));
         StatusRow(card, "Onboarding", RouterStatus.Onboarding(inspection.OnboardingStatus, source));
+        StatusRow(card, "Router onboarding service", RouterStatus.BluetoothService(inspection.BluetoothServiceStatus, source));
         StatusRow(card, "Router WAN link", RouterStatus.Wan(Catalog.Text(inspection.Data.GetValueOrDefault("OB_WANSTATUS_ALL")?["OB_WANSTATUS"]?["WAN_STATUS"]), source));
         var update = inspection.Data.GetValueOrDefault("OB_SWUPDATESTATUS_ALL")?["OB_SWUPDATESTATUS"];
         var upgrade = Catalog.Text(update?["UPGRADE_STATUS"]); var progress = Catalog.Text(update?["PROGRESS_PERCENTAGE"]);
