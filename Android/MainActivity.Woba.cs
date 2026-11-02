@@ -55,13 +55,11 @@ public sealed partial class MainActivity
         else
         {
             var form=Card("Establish a local admin login","This replaces the local admin credential. It leaves Wi-Fi credentials and mesh membership alone. Review the target before applying.");
-            var serial=Input(form,"Confirm the exact serial from the router label");
             var user=Input(form,"New local username","admin");
             var pass=Input(form,"New local admin password (12–64 characters)",secret:true);
             var again=Input(form,"Confirm the new password",secret:true);
             Action(form,"Review local admin setup",async()=>
             {
-                if(serial.Text?.Trim().ToUpperInvariant()!=inspection.Device.Serial)throw new RouterException("The serial entered does not match the inspected unit. Nothing was changed.");
                 if(pass.Text!=again.Text)throw new RouterException("The new passwords do not match.");
                 var credential=new RouterCredential(user.Text?.Trim()??"",pass.Text??"");
                 using var session=new WobaSession(endpoint){Progress=m=>status.Text=m};

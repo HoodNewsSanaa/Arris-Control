@@ -43,8 +43,9 @@ EXTENDER/ONBOARDING can stage rather than activate the credential, so they are n
 presented as verified normal-admin provisioning.
 
 A fresh inspection rechecks serial, WAN MAC, model, role, firmware, completion and
-upgrade state after review. An exact serial typed from the device label confirms
-the target. A Keystore-encrypted pending credential with the observed public-key
+upgrade state after review. Android 0.4.2 removes manual serial-number entry;
+the review identifies the selected router and automatic identity checks remain.
+A Keystore-encrypted pending credential with the observed public-key
 pin and local address is persisted before one setter request. An uncertain write
 is never retried. Verification requires that original pin, even after rediscovery;
 it cannot silently fall back to trusting a different key. Verified records are
