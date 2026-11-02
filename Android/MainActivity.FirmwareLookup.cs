@@ -94,9 +94,5 @@ public sealed partial class MainActivity
         ShowRouter(); await Read();
     }
 
-    protected override void OnStop()
-    {
-        lookupRecording?.Cancel();
-        base.OnStop();
-    }
+
 }

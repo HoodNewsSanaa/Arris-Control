@@ -19,6 +19,7 @@ internal static class Settings
     static SettingField Toggle(string key,string label)=>new(key,label,"toggle");
     static SettingField Text(string key,string label,string kind="text",string hint="")=>new(key,label,kind,null,hint);
     public static readonly SettingDefinition[] Definitions=[
+        new("AUTO_WOBA_SAT_STATUS_ALL","AUTO_WOBA","Local mesh discovery",[Toggle("ENABLE","Enable node discovery"),Text("TIMEOUT","Discovery timeout (seconds)","pairtimeout")],false,"Opens or closes the controller discovery window. This does not configure a satellite or prove it joined. Full offline pairing still needs hardware validation."),
         new("NETWORKDNS_ALL","NETWORKDNS","DNS servers",[
             new("DYNAMICV4","IPv4 DNS mode","choice",[new("1","Automatic"),new("0","Manual")]),
             Text("DNSIPV4SERVERS","IPv4 DNS servers","dns4"),
@@ -114,7 +115,7 @@ internal static class Settings
         var result=new List<SettingSection>();
         foreach(var def in Definitions.Where(d=>!d.ActionOnly && snapshot.Data.ContainsKey(d.Key)))
         {
-            var node=snapshot.Data[def.Key][def.Container];
+            var node=def.Container=="AUTO_WOBA"?Locate(snapshot.Data[def.Key],def.Container,0,""):snapshot.Data[def.Key][def.Container];
             if(node is JsonObject o)result.Add(new(def,def.Container,0,Catalog.Text(o["IDX"]),Filter(def,o),def.Title));
             if(node is JsonArray array)for(var i=0;i<array.Count;i++)if(array[i] is JsonObject item)
             {
@@ -127,6 +128,13 @@ internal static class Settings
     public static JsonObject? Locate(JsonObject response,string container,int index,string identity)
     {
         var node=response[container];
+        if(container=="AUTO_WOBA" && response["AUTO_WOBA_SAT_STATUS"] is JsonObject status)
+        {
+            var mapped=new JsonObject();
+            if(status.ContainsKey("ENABLE"))mapped["ENABLE"]=status["ENABLE"]?.DeepClone();
+            if(status.ContainsKey("AGENT_TIMEOUT"))mapped["TIMEOUT"]=status["AGENT_TIMEOUT"]?.DeepClone();
+            return mapped.Count>0?mapped:null;
+        }
         if(index<0)return new JsonObject();
         if(node is JsonObject obj)return obj;
         if(node is JsonArray array)
@@ -162,9 +170,9 @@ internal static class Settings
         if(field.Kind=="netmask" && !IsNetmask(value))throw new RouterException("Enter a subnet mask such as 255.255.255.0.");
         if(field.Kind=="host" && !Regex.IsMatch(value,@"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$"))throw new RouterException("Enter a website name such as example.com (without http://).");
         if(field.Kind=="timezone" && !Regex.IsMatch(value,@"^[A-Za-z0-9_+\-/:., ]{1,64}$"))throw new RouterException("Enter a time zone such as America/New_York.");
-        if(field.Kind is "port" or "lease" or "positive" or "channel")
+        if(field.Kind is "port" or "lease" or "positive" or "channel" or "pairtimeout")
         {
-            var maximum=field.Kind=="port" ? 65535L:field.Kind=="channel" ? 233L:int.MaxValue;
+            var maximum=field.Kind=="pairtimeout"?3600L:field.Kind=="port" ? 65535L:field.Kind=="channel" ? 233L:int.MaxValue;
             if(!long.TryParse(value,out var number) || number<1 || number>maximum)throw new RouterException(field.Label+" must be between 1 and "+maximum+".");
         }
     }

@@ -61,7 +61,7 @@ internal static class Catalog
 {
     public static readonly Page[] Pages = [
         new("overview","Overview","Router status, firmware, Internet connection, and DNS.",["DEVICEOPERMODE_ALL","DEVICESTATUS_ALL","FIRMWARE_ALL","NETWORKDNS_ALL"]),
-        new("mesh","Mesh and devices","Topology, connected devices, radio channels, and backhaul information.",["NETWORKMAP_ALL","HOSTS_ALL","LINKSPEEDBH_ALL","WIFI_BH_ALL","SPEEDTESTBH_ALL","WIFI_TRIBAND_ALL","HNC_CLIENT_STEERING_ALL"]),
+        new("mesh","Mesh and devices","Topology, connected devices, radio channels, and backhaul information.",["NETWORKMAP_ALL","HOSTS_ALL","LINKSPEEDBH_ALL","WIFI_BH_ALL","SPEEDTESTBH_ALL","WIFI_TRIBAND_ALL","HNC_CLIENT_STEERING_ALL","AUTO_WOBA_SAT_STATUS_ALL"]),
         new("wifi","Wi-Fi","Main and guest Wi-Fi settings. Saving Wi-Fi changes may disconnect this PC.",["WIFI_24G_ALL","WIFI_5G_ALL","WIFI_GUEST_24G_ALL","WIFI_GUEST_5G_ALL","WIFI_FH_BANDSTEERING_ALL","WIFI_FH_DFS_ALL","WIFI_FAST_LANE_ALL","WIFISETTINGSFEATURE_ALL"]),
         new("internet","Internet and DNS","DNS servers, WAN information, and IPv6 routing.",["NETWORKDNS_ALL","NETWORKIP_ALL","DEVICEOPERMODE_ALL","WANSTATICIPV4_ALL","WANDYNAMICIPV6_ALL","WANSTATICIPV6_ALL","WANLAG_ALL","WANSETTINGSFEATURE_ALL"]),
         new("lan","LAN and DHCP","DHCP addressing, leases, subnets, and UPnP.",["IPV4DHCPRANGE_ALL","IPV6DHCPRANGE_ALL","IPV4SUBNET_ALL","IPV6SUBNET_ALL","NETWORKMISC_ALL","LANSETTINGSFEATURE_ALL"]),
@@ -273,14 +273,14 @@ internal sealed class LocalWire : IRouterWire
         await using var input=await reply.Content.ReadAsStreamAsync(token);
         using var memory=new MemoryStream();var buffer=new byte[65536];int count;
         while((count=await input.ReadAsync(buffer,token))>0){if(memory.Length+count>8*1024*1024)throw new RouterException("Router response exceeded the display limit.");await memory.WriteAsync(buffer.AsMemory(0,count),token);}
-        return ParseResponse(memory.ToArray(),path=="/loginAction");
+        return ParseResponse(memory.ToArray(),path=="/loginAction",path=="/setData");
     }
-    internal static JsonObject ParseResponse(byte[] body,bool login=false)
+    internal static JsonObject ParseResponse(byte[] body,bool login=false,bool write=false)
     {
         JsonObject? response;
         try{response=JsonNode.Parse(body)?["RESPONSE"] as JsonObject;}catch(JsonException){throw new RouterException("Router returned an unexpected response.");}
         var status=Catalog.Text(response?["STATUS"]);
-        if(response is null || !(status=="OK" || login && status=="Login-OK"))throw new RouterException("Router status: "+(Regex.IsMatch(status,"^[A-Za-z][A-Za-z0-9_. -]{0,79}$")?status:"unrecognized"),status);
+        if(response is null || !(status=="OK" || login && status=="Login-OK" || write && status=="SUCCESS"))throw new RouterException("Router status: "+(Regex.IsMatch(status,"^[A-Za-z][A-Za-z0-9_. -]{0,79}$")?status:"unrecognized"),status);
         return response;
     }
     public void Dispose()=>client.Dispose();

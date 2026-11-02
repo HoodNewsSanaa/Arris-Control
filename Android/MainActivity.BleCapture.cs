@@ -82,6 +82,7 @@ public sealed partial class MainActivity
     }
     protected override void OnStop()
     {
+        lookupRecording?.Cancel();
         // No background service: stop and preserve the report when leaving the
         // app rather than quietly retaining the router's Bluetooth connection.
         bleCaptureStop?.Cancel();

@@ -79,6 +79,7 @@ public sealed partial class MainActivity : Activity
                 {
                     try { await RouterNetworkSelfTests.RunAsync(lifetime.Token); }
                     catch (Exception ex) { Android.Util.Log.Error("ArrisControlSelfTest", ex.ToString()); throw; }
+                    ShowMeshRenderFixture();
                     status.Text = "PASS: Android API scan, HTTPS login and reconnect.";
                     if (root.Width > 0 && root.Height > 0)
                     {
@@ -294,7 +295,7 @@ public sealed partial class MainActivity : Activity
     {
         var prefs = GetSharedPreferences("updates", FileCreationMode.Private)!;
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        if (!prefs.GetBoolean("automatic", true) || now - prefs.GetLong("lastCheck", 0) < 6 * 60 * 60) return;
+        if (!prefs.GetBoolean("automatic", false) || now - prefs.GetLong("lastCheck", 0) < 6 * 60 * 60) return;
         try
         {
             var update = await AndroidUpdater.CheckAsync(this, lifetime.Token);
@@ -310,7 +311,7 @@ public sealed partial class MainActivity : Activity
         Shell("App updates"); backAction = BackToStart;
         var prefs = GetSharedPreferences("updates", FileCreationMode.Private)!;
         var settings = Card("Keep Arris Control current", "The app checks for Android builds on GitHub. Downloads and installation start only when you choose them.");
-        var automatic = new Switch(this) { Text = "Check automatically when the app opens", Checked = prefs.GetBoolean("automatic", true), TextSize = 16 };
+        var automatic = new Switch(this) { Text = "Check automatically when the app opens", Checked = prefs.GetBoolean("automatic", false), TextSize = 16 };
         automatic.SetTextColor(Palette.Text); automatic.SetPadding(0, Dp(14), 0, Dp(14));
         automatic.CheckedChange += (_, e) => prefs.Edit()!.PutBoolean("automatic", e.IsChecked)!.Apply();
         settings.AddView(automatic);
@@ -393,8 +394,18 @@ public sealed partial class MainActivity : Activity
             foreach (var entry in pendingSetups.DistinctBy(x => x.Draft.Device.Serial))
                 Action(pending, "Verify local login\n" + entry.Draft.Device.Serial, () => { ShowOfflineVerification(entry.Path, entry.Draft); return Task.CompletedTask; }, Tone.Primary);
         }
-        var account = Card(records.Count > 0 ? "Add another router" : "Sign in to get started",
-            "Use your ARRIS / SURFboard Central account. The app finds your router on this Wi-Fi and connects. Your password isn't saved.");
+        var local = Card("Set up and manage locally", "Bluetooth for first-time setup; local Wi-Fi for settings and mesh information. No ARRIS account required.");
+        Action(local, "Set up a router over Bluetooth", BleScanAndPick, Tone.Primary);
+        address = Input(local, "Local router address", lastAddress);
+        address.TextChanged += (_, _) => addressEdited = true;
+        Action(local, "Find ARRIS routers on this Wi-Fi", ScanRouters);
+        Action(local, "Use an existing local admin login", EnterLocalLogin);
+        Action(local, "Bluetooth setup and node diagnostics", SetupDiagnostics);
+        local.AddView(Label("Offline factory setup and complete node pairing still need physical-router validation. A fresh unit may expose only Bluetooth.", 12));
+        var cloudOptions = Card("Optional account access", "Only use this if you choose to acquire a credential through ARRIS. Local setup above does not contact ARRIS.");
+        var account = Column(); account.Visibility = ViewStates.Gone; cloudOptions.AddView(account);
+        Action(cloudOptions, "Show ARRIS account options", () => { account.Visibility = account.Visibility == ViewStates.Gone ? ViewStates.Visible : ViewStates.Gone; return Task.CompletedTask; });
+
         email = Input(account, "Account email", prefs.GetString("email", "") ?? "");
         email.InputType = InputTypes.ClassText | InputTypes.TextVariationEmailAddress;
         password = Input(account, "Account password", secret: true);
@@ -410,9 +421,7 @@ public sealed partial class MainActivity : Activity
         var advanced = Column(); advanced.Visibility = ViewStates.Gone;
         Action(more, "Show more options  ⌄", () => { advanced.Visibility = advanced.Visibility == ViewStates.Gone ? ViewStates.Visible : ViewStates.Gone; return Task.CompletedTask; });
         more.AddView(advanced);
-        address = Input(advanced, "Router address (only if it changed)", lastAddress);
-        address.TextChanged += (_, _) => addressEdited = true;
-        Action(advanced, "Scan this Wi-Fi for ARRIS routers", ScanRouters);
+
         Action(advanced, "Wi-Fi settings", () => { StartActivity(new Intent(Android.Provider.Settings.ActionWifiSettings)); return Task.CompletedTask; });
         Action(advanced, "Choose a SURFboard Central APK file", PickReferenceFile);
         Action(advanced, "Use previously acquired credential", async () =>
@@ -422,8 +431,13 @@ public sealed partial class MainActivity : Activity
                 ?? throw new RouterException("No saved account credential was found.");
             acquired = await Task.Run(() => AcquisitionStore.Load(file), lifetime.Token); ShowDevices();
         });
-        Action(advanced, "Enter a local management login", async () =>
-        {
+        Action(advanced, "Set up a new router over Bluetooth", BleScanAndPick);
+        Action(advanced, "Setup and mesh diagnostics (read-only)", SetupDiagnostics);
+        AddSavedBleCapture(advanced);
+        content.AddView(Label("Local control · credentials encrypted on this phone", 12, color: Palette.Muted));
+    }
+    async Task EnterLocalLogin()
+    {
             var form = Column(); form.SetPadding(Dp(20), Dp(4), Dp(20), Dp(4));
             var formScroll = new ScrollView(this); formScroll.AddView(form);
             var serial = Input(form, "Router serial number"); var mac = Input(form, "Router certificate MAC address");
@@ -439,11 +453,6 @@ public sealed partial class MainActivity : Activity
             var credential = new RouterCredential(user.Text, pass.Text); pass.Text = "";
             var device = new CloudDevice("ARRIS mAX", id, hardware); acquired = new(credential, [device]);
             await Verify(device);
-        });
-        Action(advanced, "Set up a new router over Bluetooth", BleScanAndPick);
-        Action(advanced, "Setup and mesh diagnostics (read-only)", SetupDiagnostics);
-        AddSavedBleCapture(advanced);
-        content.AddView(Label("Local control · credentials encrypted on this phone", 12, color: Palette.Muted));
     }
     async Task ScanRouters()
     {
@@ -1025,6 +1034,7 @@ public sealed partial class MainActivity : Activity
         if (currentPage.Id is "diagnostics" or "accessdiagnostics") { dirty = false; ShowDiagnostics(snapshot); return; }
         dirty = false; content.AddView(Label(currentPage.Description.Replace("this PC", "this phone")));
         if (currentPage.Id == "tools") ShowTools(snapshot);
+        if (currentPage.Id == "mesh") ShowMesh(snapshot);
         if ((currentPage.Id is "overview" or "internet") && snapshot.Data.TryGetValue("DEVICEOPERMODE_ALL", out var modes) && modes["DEVICEOPERMODE"] is JsonObject mode)
         {
             var value = Catalog.Text(mode["MODE"]);

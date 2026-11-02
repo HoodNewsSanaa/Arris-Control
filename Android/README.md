@@ -4,7 +4,7 @@ Install `Arris-Control-android.apk` from an **Android preview** on the repositor
 
 ## App updates
 
-Use **Updates** at the top of the app. Automatic checks run when the app opens;
+Use **Updates** at the top of the app. Automatic checks are off by default;
 downloads and Android installation approval stay under your control. Public
 releases use a permanent signing key and compatible updates preserve saved logins. Older
 disposable-key previews need one final reinstall. See [updater details](UPDATES.md).
@@ -13,24 +13,53 @@ disposable-key previews need one final reinstall. See [updater details](UPDATES.
 
 The interface uses a black background, white text, large outlined controls, 60 dp minimum buttons and 64 dp option rows. Connection, discovery and saved routers have separate cards. Account setup and returned-field details expand when needed; settings keep Refresh and Connections actions within reach at the bottom. No teal or blue accents are used.
 
-## Connect
+## Local setup and connection
 
-1. Join your router's Wi-Fi.
-2. Open Arris Control, enter your ARRIS / SURFboard Central account email and password, and tap **Sign in**.
+The primary screen is local-first. No ARRIS account, official app, protocol archive,
+or Internet connection is needed by these local actions:
 
-That's it. The app finds the SURFboard settings it needs, signs in, picks your router (or asks if your account has several), finds it on your Wi-Fi by its certificate, verifies it, and connects. Your account password and cloud tokens are never saved; the router's local login is saved encrypted, and later launches reconnect automatically without signing in.
+1. **Set up a router over Bluetooth** scans for the existing mAX GATT setup services,
+   reads the selected unit's identity/state, and opens the existing guided setup.
+   It stages local admin credentials and Wi-Fi settings, sends each confirmed phase
+   once, then asks you to join Wi-Fi and verify a normal authenticated local login.
+2. **Find ARRIS routers on this Wi-Fi** probes the current connected subnet without
+   credentials and lets you select a matching local management API.
+3. **Use an existing local admin login** verifies the certificate, exact device serial
+   and protected routing mode, then retains the credential using Android Keystore.
+4. Saved routers reconnect locally, including bridge mode when their admin API is
+   reachable. The app does not equate Wi-Fi credentials with admin credentials.
 
-**SURFboard settings.** Account sign-in needs a few settings from the SURFboard Central app. Arris Control looks for them automatically: its own encrypted copy, then a copy bundled into a personal build (below), then the installed SURFboard Central app. If none is found, it offers to install SURFboard Central from Google Play. You don't need to open or set it up, and you can uninstall it after the first sign-in. You can also pick a SURFboard Central 4.3.5 APK/XAPK under **More options**.
+Bluetooth bring-up is separate from Wi-Fi management. Fresh routers may expose
+only Bluetooth. **Offline factory setup is experimental and still needs spare-unit
+validation**: the app makes no ARRIS requests, but firmware independence from ARRIS
+services is not established. See [offline setup scope](../docs/offline-first-setup.md).
 
-**More options** also has: scanning for routers, a manual router address, a previously acquired credential, an existing local management login (not the Wi-Fi password), and Bluetooth setup for a factory-reset router.
+Optional account acquisition remains collapsed under **Optional account access**.
+Opening it and signing in explicitly contacts ARRIS. It is not part of local setup.
+The optional updater contacts GitHub only when requested or when automatic checks
+have been enabled by the user. Existing explicit update preferences are retained.
 
-**Experimental first-time offline setup:** Bluetooth setup now uses the text
-fragments and slot order observed in SURFboard Central 4.3.5, followed by its
-actual setup-complete command. It saves an encrypted pending local login before
-writing, stops after any uncertain result, and provides local HTTPS verification
-without an ARRIS account or protocol reference. This still needs a spare-unit
-hardware test; firmware may require cloud registration. See
-[the exact scope, procedure and evidence](../docs/offline-first-setup.md).
+### Triangle mesh view and adding nodes
+
+**Mesh and devices** draws up to eight known routers, with a triangle arrangement
+for three nodes. All known routers also have accessible selection buttons below
+the map. Tap a router to view its parent links, medium, directional PHY rates,
+signal and the source of the report. More than eight routers remain available in
+that list. A node in the satellite inventory alone does not establish its parent
+or an active backhaul. Clients and radio/interface tree entries are excluded from
+router nodes. Unknown links/rates are shown explicitly; the display is a timestamped
+snapshot refreshed with **Refresh**, not a continuously measured speed test.
+
+Backhaul association records are joined to a unique satellite MAC/backhaul MAC.
+Only the mapped standard DOWNLINKRATE/UPLINKRATE values are converted from kbit/s;
+proprietary TXRATE/RXRATE units are not guessed. Link rate is not throughput.
+
+**Add a mesh node** opens Bluetooth inspection, the main router's locally reported
+discovery controls, and a topology refresh. Discovery uses a reviewed, single
+AUTO_WOBA write with stale/identity checks and read-back, with a 1–3600 second
+timeout. **It does not yet implement or promise complete offline satellite pairing.**
+Setting EXTENDER or enabling discovery alone is not reported as a successful join.
+No physical unit has been configured or paired as part of this build's tests.
 
 ### Record a stalled onboarding state
 
@@ -101,7 +130,7 @@ Some firmware will return Unsupported/InvalidOption for particular groups.
 
 The app shares the Windows protocol and settings engine: status, mesh/client fields, bridge/bypass ON/OFF, Wi-Fi names/passwords, guest settings, DNS, DHCP, UPnP, reservations/forwarding, priority/QoS, parental-control enable and LED state. Only fields returned by the unit's firmware have editors. All returned nonsecret fields appear below the forms. Settings require a preview confirmation, fresh identity/current-value checks, and a single write with read-back. A lost save reply is reported as unknown and never retried.
 
-This does not implement factory onboarding, account recovery, MFA challenges, firmware updates or all vendor-app features. A visible SSID that refuses association/IP assignment must be diagnosed separately; the app cannot contact a unit until the phone has a working local network connection.
+Complete factory onboarding and offline satellite pairing remain unverified. Account recovery, MFA challenges, firmware updates and full vendor-app parity are not implemented. A visible SSID that refuses association/IP assignment must be diagnosed separately; the app cannot contact a unit until the phone has a working local network connection.
 
 ## Build and verification
 
