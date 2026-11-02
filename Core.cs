@@ -293,6 +293,13 @@ internal sealed partial class RouterClient : IDisposable
 {
     CredentialRecord record;IRouterWire wire;bool authenticated;readonly bool testTransport;string? pin;
     public CredentialRecord Record=>record;
+    public bool IsConnected=>authenticated;
+    internal string? SessionPin=>pin;
+    public string OnboardingStatus{get;private set;}="";
+    public string RoutingMode{get;private set;}="";
+    public string Model{get;private set;}="";
+    public string FirmwareVersion{get;private set;}="";
+    public DateTimeOffset? LoginObservedAt{get;private set;}
     public Action<string>? Progress {get;set;}
     public RouterClient(CredentialRecord r,IRouterWire? testWire=null){record=r;wire=testWire??new LocalWire(r);authenticated=testWire is not null;testTransport=testWire is not null;}
     static string EncodeAndroid(string s)
@@ -314,14 +321,13 @@ internal sealed partial class RouterClient : IDisposable
     {
         if(testTransport){authenticated=true;return;}
 #if ANDROID
-        AndroidNetwork.UseLocal();
+        try{AndroidNetwork.UseLocal();}catch{authenticated=false;throw;}
 #endif
-        if(authenticated && pin is not null)
-        {
-            Progress?.Invoke("Locating the selected router on local networks…");
-            if(await RouterDiscovery.ResolveAsync(record,pin,token)==record.Address)return;
-            authenticated=false;
-        }
+        // Reuse the pinned HTTP transport and current cookie. A section change
+        // must not open a discovery TLS connection or scan the subnet first.
+        // Failed reads invalidate this session; explicit refresh then locates it.
+        token.ThrowIfCancellationRequested();
+        if(authenticated)return;
         var previous=CredentialStore.Inspect(record.Path);
         if(previous.Serial!=record.Serial || previous.Mac!=record.Mac)throw new RouterException("Credential identity changed during discovery.");
         // The pin comes from the encrypted payload, never from editable record metadata.
@@ -330,7 +336,9 @@ internal sealed partial class RouterClient : IDisposable
         var address=await RouterDiscovery.ResolveAsync(record,pin,token);
         wire.Dispose();var local=new LocalWire(record with{Address=address},pin);wire=local;
         Progress?.Invoke("Verifying local router identity at "+address+"…");
-        await wire.SendAsync("/loginAction",LoginBody(credential.UserName,credential.Password,"abcxyz123_windows_"+Guid.NewGuid().ToString("N"),DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()),token);
+        OnboardingStatus="";LoginObservedAt=null;
+        var login=await wire.SendAsync("/loginAction",LoginBody(credential.UserName,credential.Password,"abcxyz123_windows_"+Guid.NewGuid().ToString("N"),DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()),token);
+        OnboardingStatus=Catalog.Text(login["OBASTATUS"]);LoginObservedAt=DateTimeOffset.Now;
         await VerifyIdentityAsync(token);_ = await ReadAsync("DEVICEOPERMODE_ALL",token);authenticated=true;
         record=record with{Address=address};
         try
@@ -354,10 +362,17 @@ internal sealed partial class RouterClient : IDisposable
     {
         var info=await ReadAsync("DEVICE_INFO_ALL",token);
         if(Catalog.Text(info["DEVICE_INFO"]?["SERIAL_KEY"])!=record.Serial)throw new RouterException("The returned router serial does not match the selected credential. No setting was changed.");
+        Model=Catalog.Text(info["DEVICE_INFO"]?["MODEL_NAME"]);
+        FirmwareVersion=Catalog.Text(info["DEVICE_INFO"]?["SOFTWARE_VERSION"]);
     }
-    internal Task<JsonObject> ReadAsync(string key,CancellationToken token=default)
+    public async Task ReconnectAsync(CancellationToken token=default)
+    {authenticated=false;await ConnectAsync(token);}
+    internal async Task<JsonObject> ReadAsync(string key,CancellationToken token=default)
     {
-        if(!Catalog.ReadKeys.Contains(key))throw new RouterException("Unknown read query.");return wire.SendAsync("/getData?key="+key,null,token);
+        if(!Catalog.ReadKeys.Contains(key))throw new RouterException("Unknown read query.");
+        var value=await wire.SendAsync("/getData?key="+key,null,token);
+        if(key=="DEVICEOPERMODE_ALL")RoutingMode=Catalog.Text(value["DEVICEOPERMODE"]?["MODE"]);
+        return value;
     }
     public async Task<Snapshot> ReadPageAsync(Page page,CancellationToken token=default)
     {
@@ -366,6 +381,7 @@ internal sealed partial class RouterClient : IDisposable
         var relogged=false;var stop=false;
         foreach(var key in page.Keys)
         {
+            Progress?.Invoke($"Reading {page.Name}: {reads.Count+1}/{page.Keys.Length} · {key}…");
             // Reads are safe to repeat: on the first expired session, log in again once and retry this key.
             for(var attempt=0;attempt<2 && !stop;attempt++)
             {
@@ -378,8 +394,8 @@ internal sealed partial class RouterClient : IDisposable
                     {reads.Add(new(key,null,"SessionTimeout",DateTimeOffset.Now,false));stop=true;}
                 }
                 catch(RouterException ex){reads.Add(new(key,null,ex.Code.Length>0?ex.Code:ex.Message,DateTimeOffset.Now,false));if(ex.Code=="SessionTimeout"){authenticated=false;stop=true;}break;}
-                catch(HttpRequestException ex){reads.Add(new(key,null,RouterDiscovery.ConnectionFailure(ex,record.Address),DateTimeOffset.Now,false));break;}
-                catch(TaskCanceledException) when(!token.IsCancellationRequested){reads.Add(new(key,null,"Timed out",DateTimeOffset.Now,false));break;}
+                catch(HttpRequestException ex){authenticated=false;stop=true;reads.Add(new(key,null,RouterDiscovery.ConnectionFailure(ex,record.Address),DateTimeOffset.Now,false));break;}
+                catch(TaskCanceledException) when(!token.IsCancellationRequested){authenticated=false;stop=true;reads.Add(new(key,null,"Timed out; remaining queries stopped",DateTimeOffset.Now,false));break;}
             }
             if(stop)break;
         }

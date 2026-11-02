@@ -102,7 +102,7 @@ class RouterFixture:
                     return
                 owner.logins += 1
                 owner.cookie = 'MOBAPPSESSID=fictional-session-' + str(owner.logins)
-                self.reply({'STATUS': 'Login-OK'})
+                self.reply({'STATUS': 'Login-OK', 'OBASTATUS': '1'})
 
             def do_GET(self):
                 if self.path.startswith('/woba_getData?key='):

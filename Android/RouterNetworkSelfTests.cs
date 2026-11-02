@@ -34,10 +34,18 @@ internal static class RouterNetworkSelfTests
             // This is the same address override the Android saved-router action now supplies.
             using(var first=new RouterClient(saved with { Address=host }))
             {
+                var discoveryChecks=0;
+                first.Progress=message=>{if(message.StartsWith("Locating the selected router",StringComparison.Ordinal))discoveryChecks++;};
                 await first.ConnectAsync(token);
+                if(discoveryChecks!=1)throw new InvalidOperationException("The initial saved-router connection did not resolve the router once.");
+                if(first.OnboardingStatus!="1" || first.RoutingMode!="BRIDGE" || first.Model!="W30" || first.FirmwareVersion!="AXR.0814.240522.10" || first.LoginObservedAt is null)
+                    throw new InvalidOperationException("Normal local status lost onboarding/routing mode or authenticated firmware identity.");
                 var page=await first.ReadPageAsync(new Page("fixture","Fixture","",["DEVICEOPERMODE_ALL"]),token);
                 if(Catalog.Text(page.Data["DEVICEOPERMODE_ALL"]["DEVICEOPERMODE"]?["MODE"])!="BRIDGE")
                     throw new InvalidOperationException("The first real HTTPS login/cookie/protected read failed.");
+                var other=await first.ReadPageAsync(new Page("fixture2","Another section","",["DEVICE_INFO_ALL"]),token);
+                if(discoveryChecks!=1 || !other.Reads.Single().Readable)
+                    throw new InvalidOperationException("Changing sections repeated router discovery or lost the established session.");
                 var enable=await first.PrepareWebUiExperimentAsync(true,token);
                 if(!(await first.ApplyWebUiExperimentAsync(enable,token)).StartsWith("Flag enabled and read back"))
                     throw new InvalidOperationException("Native HTTPS browser enable/read-back failed.");

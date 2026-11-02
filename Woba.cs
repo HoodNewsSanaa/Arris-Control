@@ -72,7 +72,7 @@ internal static class WobaProtocol
     }
 }
 internal sealed record WobaInspection(CloudDevice Device,string Address,string Pin,string Role,string Firmware,bool Incomplete,
-    IReadOnlyDictionary<string,JsonObject> Data,IReadOnlyList<ReadResult> Reads,DateTimeOffset Time)
+    IReadOnlyDictionary<string,JsonObject> Data,IReadOnlyList<ReadResult> Reads,DateTimeOffset Time,string OnboardingStatus="")
 {
     public override string ToString()=>"Local onboarding inspection (private identity withheld)";
 }
@@ -116,7 +116,7 @@ internal sealed class WobaSession : IDisposable
         var device=new CloudDevice(model,serial,actualMac);
         if(actualMac.Length>0 && actualMac!=mac)throw new RouterException("WOBA identity does not match the discovered certificate MAC. No settings were changed.");
         return new(device,address,pin,Catalog.Text(Value("OB_DEVICEMODE_ALL","OB_DEVICEMODE")?["DEVICE_MODE"]),
-            Catalog.Text(caps?["FW_VERSION"]),Catalog.Text(login["OBASTATUS"])=="1",data,reads,DateTimeOffset.UtcNow);
+            Catalog.Text(caps?["FW_VERSION"]),Catalog.Text(login["OBASTATUS"])=="1",data,reads,DateTimeOffset.UtcNow,Catalog.Text(login["OBASTATUS"]));
     }
     internal static void CheckWritable(WobaInspection inspection)
     {

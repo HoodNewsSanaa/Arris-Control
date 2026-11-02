@@ -5,10 +5,10 @@ using System.Text.RegularExpressions;
 namespace ArrisControl;
 public sealed partial class MainActivity
 {
-    void ShowWobaStart()
+    void ShowWobaStart(string? selectedAddress=null)
     {
         ble?.Dispose();ble=null;
-        var previous=address?.Text?.Trim()??"192.168.7.1";
+        var previous=selectedAddress??address?.Text?.Trim()??"192.168.7.1";
         client?.Dispose();client=null;acquired=null;
         Shell("WOBA local setup");backAction=BackToStart;
         var intro=Card("Local onboarding access","Use this after Bluetooth bring-up makes the local HTTPS API reachable. WOBA needs incomplete onboarding. This does not reset a configured router, install root or contact ARRIS.");
@@ -39,6 +39,7 @@ public sealed partial class MainActivity
         Shell("WOBA inspection");backAction=()=>{ShowWobaStart();return Task.CompletedTask;};
         var identity=Card("Selected router",inspection.Device.ToString(),chipText:inspection.Incomplete?"Onboarding incomplete":"State unverified");
         identity.AddView(Label("Local address: "+inspection.Address+"\nRole: "+inspection.Role+"\nFirmware: "+inspection.Firmware+"\nCertificate key: "+endpoint.Fingerprint,14));
+        ShowWobaStatus(inspection);
         var diagnostics=Card("Onboarding diagnostics","Identity, role, WAN, update progress and supported setup fields. Passwords, physical-access hashes and cloud configuration are excluded.");
         var fields=inspection.Data.SelectMany(kv=>Catalog.Flatten(kv.Value,kv.Key)).ToArray();
         var text=Label(string.Join("\n\n",fields.Select(f=>f.Field+"\n"+f.Value)),13);text.SetTextIsSelectable(true);diagnostics.AddView(text);
@@ -86,6 +87,7 @@ public sealed partial class MainActivity
                 }
             },Tone.Primary);
         }
+        AddWobaCompletion(endpoint,inspection);
         Action(content,"Refresh WOBA inspection",async()=>
         {
             using var session=new WobaSession(endpoint){Progress=m=>status.Text=m};ShowWobaInspection(endpoint,await session.InspectAsync(lifetime.Token));

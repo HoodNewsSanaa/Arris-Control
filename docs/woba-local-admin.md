@@ -54,6 +54,25 @@ Old records remain intact. Legacy pending Bluetooth records retain compatibility
 
 ## What this does not establish
 
+### Android 0.4.3: completion from WOBA
+
+The WOBA inspection screen has a **Finish onboarding…** action.
+It first verifies a saved normal admin login against the inspected certificate,
+then lets the user select the nearby Bluetooth unit. Serial and WAN MAC are
+matched automatically; no serial entry is requested. After confirmation it
+refreshes WOBA identity/role/firmware/update state, verifies normal admin access
+again, and sends the observed Bluetooth `SETOBCOMPLETE` command once. There is
+no HTTP completion fallback. Earlier hardware notes record an HTTP completion
+reply that did not actually change onboarding state.
+
+The result screen separately checks normal admin access and a recognized
+onboarding result: explicit `OBASTATUS=0` from a fresh normal login, or, if that
+login omits the flag, explicit `OBASTATUS=0` / `LoginNotApplicable` from WOBA.
+An acknowledgement, unavailable response or unrecognized state does not count
+as completion. A lost write reply is never automatically retried. Completion
+still requires physical hardware validation and a running Bluetooth service.
+The same W30 firmware, MAINAP, identity and idle-update guards apply.
+
 This is local administrator access, not UID 0/root or persistent root. No CPU
 sensor endpoint was found in this WOBA API. It does not complete offline satellite
 pairing, bypass the three-node limit, enable automatic controller failover, or

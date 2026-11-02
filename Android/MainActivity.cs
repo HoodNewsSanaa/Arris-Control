@@ -18,6 +18,7 @@ public sealed partial class MainActivity : Activity
 {
     LinearLayout root = null!, content = null!;
     TextView status = null!, networkStatus = null!;
+    TextView? routerSessionStatus;
     ProgressBar activityProgress = null!;
     EditText address = null!, email = null!, password = null!;
     CloudConfiguration? configuration;
@@ -52,7 +53,6 @@ public sealed partial class MainActivity : Activity
         ShowConnect();
         var updateTest = Intent?.GetBooleanExtra("updaterSelfTest", false) == true || Intent?.GetBooleanExtra("updateRetentionSelfTest", false) == true;
         if (Intent?.GetBooleanExtra("offlineSelfTest", false) != true && !updateTest) _ = CheckUpdatesQuietly();
-        if (Intent?.GetBooleanExtra("offlineSelfTest", false) != true && !updateTest) TryAutoConnect();
         if (updateTest) _ = Run(() =>
         {
             try
@@ -201,7 +201,7 @@ public sealed partial class MainActivity : Activity
     }
     void Shell(string subtitle)
     {
-        buttons.Clear(); backAction = null;
+        buttons.Clear(); backAction = null; routerSessionStatus = null;
         root = Column(); root.SetBackgroundColor(Palette.Bg); root.FocusableInTouchMode = true; root.RequestFocus();
         root.SetPadding(Dp(20), Dp(20), Dp(20), Dp(10));
         var brandRow = new LinearLayout(this) { Orientation = Orientation.Horizontal }; brandRow.SetGravity(GravityFlags.CenterVertical);
@@ -387,7 +387,7 @@ public sealed partial class MainActivity : Activity
         var lastAddress = prefs.GetString("address", records.FirstOrDefault()?.Address ?? "192.168.7.1")!;
         if (records.Count > 0)
         {
-            var saved = Card("Your routers", "Connects over your Wi-Fi. No sign-in needed.",
+            var saved = Card("Your routers", "Tap a router to connect or find its current address. Saved logins stay on this phone.",
                 chipText: records.Count == 1 ? "Saved" : records.Count + " saved", chipColor: Palette.Success);
             foreach (var record in records) Action(saved, "Connect\n" + record.Serial, () => Connect(record, AddressOverride()), Tone.Primary);
         }
@@ -406,6 +406,7 @@ public sealed partial class MainActivity : Activity
         Action(local, "Use an existing local admin login", EnterLocalLogin);
         Action(local, "WOBA · inspect or establish local admin", () => { ShowWobaStart(); return Task.CompletedTask; });
         Action(local, "Bluetooth setup and node diagnostics", SetupDiagnostics);
+        local.AddView(Label("Router searches and connections start only when you tap a button. Bluetooth tools are available without joining the router's Wi-Fi.", 13, color: Palette.Muted));
         local.AddView(Label("Offline factory setup and complete node pairing still need physical-router validation. A fresh unit may expose only Bluetooth.", 12));
         var cloudOptions = Card("Optional account access", "Only use this if you choose to acquire a credential through ARRIS. Local setup above does not contact ARRIS.");
         var account = Column(); account.Visibility = ViewStates.Gone; cloudOptions.AddView(account);
@@ -622,9 +623,14 @@ public sealed partial class MainActivity : Activity
         // Keep failures visible. An absent value must not silently disappear from
         // this page or turn into the generic setup validation error.
         var errors = new Dictionary<string, string>();
+        var rejected = new Dictionary<string, int>();
+        var serviceMap = ble!.Map();
         async Task<string> ReadField(string uuid)
         {
-            if (!ble.Has(uuid)) { errors[uuid] = "Not exposed by this device"; return ""; }
+            var matches = serviceMap.Where(m => m.Characteristic.Equals(uuid, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (matches.Length == 0) { errors[uuid] = "Not exposed by this device"; return ""; }
+            if (matches.Length != 1 || !matches[0].Service.Equals(MaxBle.ServiceOba, StringComparison.OrdinalIgnoreCase))
+            { errors[uuid] = "Ambiguous or unexpected Bluetooth service; not read"; return ""; }
             try
             {
                 var bytes = await ble.ReadAsync(uuid, lifetime.Token);
@@ -632,6 +638,12 @@ public sealed partial class MainActivity : Activity
                     System.Text.Encoding.UTF8.GetString(bytes).Trim('\0', ' ', '\r', '\n', '\t');
                 if (value.Length == 0) errors[uuid] = "Empty response";
                 return value;
+            }
+            catch (BleReadRejectedException ex)
+            {
+                rejected[uuid] = ex.Status;
+                errors[uuid] = $"Read rejected · GATT {ex.Status} (0x{ex.Status:X2})";
+                return "";
             }
             catch (RouterException ex) { errors[uuid] = ex.Message; return ""; }
         }
@@ -644,7 +656,8 @@ public sealed partial class MainActivity : Activity
         string upgrade = await ReadField(MaxBle.UpgradeStatus), download = await ReadField(MaxBle.DownloadProgress);
 
         Shell("Router over Bluetooth"); backAction = BackToStart;
-        var looksArris = serial.Length > 0 || model.Length > 0;
+        ShowBluetoothStatus(mode, obaState, wan, upgrade, download, errors);
+        var looksArris = appName.Trim().Equals("maxrouter", StringComparison.OrdinalIgnoreCase) || serial.Length > 0 || model.Length > 0;
         var info = Card(string.IsNullOrEmpty(device.Name) ? "Connected device" : device.Name,
             chipText: looksArris ? "mAX" : "unknown", chipColor: looksArris ? Palette.Success : Palette.Muted);
         void Row(string k, string uuid, string v) => info.AddView(Label(k + ":  " +
@@ -655,6 +668,23 @@ public sealed partial class MainActivity : Activity
         Row("Device application", MaxBle.AppName, appName); Row("Upgrade status", MaxBle.UpgradeStatus, upgrade);
         Row("Download progress", MaxBle.DownloadProgress, download);
         if (!looksArris) info.AddView(Label("This device didn't return mAX identity values. It may not be an ARRIS router, or not in setup mode.", 13, color: Palette.Warning));
+
+        if (new[] { MaxBle.ModelNumber, MaxBle.Serial, MaxBle.WanMac }.Any(u => rejected.ContainsKey(u)))
+        {
+            var diagnostic = Card("Bluetooth connected · identity reads rejected",
+                "The Bluetooth link connected, but some identity reads returned error statuses. This is different from an empty identity or a failed connection. Other readable state fields are shown above.");
+            if (rejected.Values.Contains(115))
+                diagnostic.AddView(Label("GATT 115 (0x73) has no confirmed meaning for this firmware. It does not establish that pairing, a password or a reset is needed. The app will not invent missing identity values or automatically change the router's role.", 14));
+            Action(diagnostic, "View Bluetooth diagnostic log", () =>
+            {
+                ShowReport("Bluetooth read diagnostics", "Read statuses and operation order; serial/MAC values are withheld.", BleLog.Export());
+                return Task.CompletedTask;
+            });
+            Action(diagnostic, "Reconnect and read again", async () =>
+            {
+                ble?.Dispose(); ble = new BleManager(this); await BleConnectAndInspect(device);
+            });
+        }
 
         var next = Card("What next");
         var identityError = "";
@@ -990,15 +1020,6 @@ public sealed partial class MainActivity : Activity
         acquired = null; await Connect(record);
     }
 
-    // On launch, quietly reconnect to the last-used (or only) saved router when on Wi-Fi.
-    void TryAutoConnect()
-    {
-        var records = CredentialStore.Find();
-        if (records.Count == 0 || !AndroidNetwork.HasLocalNetwork) return;
-        var last = GetSharedPreferences("connection", FileCreationMode.Private)!.GetString("serial", null);
-        var record = records.FirstOrDefault(r => r.Serial == last) ?? (records.Count == 1 ? records[0] : null);
-        if (record is not null) _ = Run(() => Connect(record), quiet: true);
-    }
     string? AddressOverride() => addressEdited && !string.IsNullOrWhiteSpace(address?.Text) ? address.Text!.Trim() : null;
 
     async Task Connect(CredentialRecord record, string? addressOverride = null)
@@ -1024,7 +1045,10 @@ public sealed partial class MainActivity : Activity
             if (currentPage != Catalog.Pages[0]) { currentPage = Catalog.Pages[0]; ShowRouter(); await Read(); }
             else { client?.Dispose(); client = null; AndroidNetwork.UseInternet(); ShowConnect(); }
         };
-        var navigation = Card("Connected locally", client!.Record.Address + " · " + client.Record.Serial, chipText: "Connected", chipColor: Palette.Success);
+        var navigation = Card("Selected router", client!.Record.Address + " · " + client.Record.Serial);
+        routerSessionStatus = Label("", 13, color: Palette.Muted);
+        navigation.AddView(routerSessionStatus);
+        UpdateRouterSessionStatus();
         Action(navigation, "Change section  ⌄", async () =>
         {
             var selected = await Choose("Router settings", Catalog.Pages.Select(p => p.Name).ToArray());
@@ -1041,9 +1065,16 @@ public sealed partial class MainActivity : Activity
     async Task Read()
     {
         status.Text = "Reading " + currentPage.Name + "…";
-        var snapshot = await Task.Run(() => client!.ReadPageAsync(currentPage, lifetime.Token), lifetime.Token);
+        Snapshot snapshot;
+        try { snapshot = await Task.Run(() => client!.ReadPageAsync(currentPage, lifetime.Token), lifetime.Token); }
+        finally
+        {
+            UpdateRouterSessionStatus();
+        }
         if (currentPage.Id is "diagnostics" or "accessdiagnostics") { dirty = false; ShowDiagnostics(snapshot); return; }
         dirty = false; content.AddView(Label(currentPage.Description.Replace("this PC", "this phone")));
+        if (currentPage.Id == "overview") ShowNormalRouterStatus(snapshot);
+        if (currentPage.Id == "wifi") ShowWirelessControls(snapshot);
         if (currentPage.Id == "tools") ShowTools(snapshot);
         if (currentPage.Id == "mesh") ShowMesh(snapshot);
         if ((currentPage.Id is "overview" or "internet") && snapshot.Data.TryGetValue("DEVICEOPERMODE_ALL", out var modes) && modes["DEVICEOPERMODE"] is JsonObject mode)
@@ -1055,7 +1086,7 @@ public sealed partial class MainActivity : Activity
             if (value is "DUAL" or "IPV4ONLY") Action(bridge, "Turn bypass ON", () => Save(section, new() { ["MODE"] = () => "BRIDGE" }), Tone.Danger);
             if (value == "BRIDGE") Action(bridge, "Turn bypass OFF · restore router mode", () => Save(section, new() { ["MODE"] = () => "DUAL" }), Tone.Primary);
         }
-        foreach (var section in Settings.Sections(snapshot)) Editor(section);
+        foreach (var section in Settings.Sections(snapshot).Where(s => currentPage.Id != "wifi" || s.Container is not ("WIFI_FH_BANDSTEERING" or "WIFI_FH_DFS"))) Editor(section);
         foreach (var definition in Settings.Definitions.Where(d => d.Collection && snapshot.Data.ContainsKey(d.Key)))
             Action(content, "Add " + definition.Title.ToLowerInvariant(), () =>
             {
@@ -1069,7 +1100,9 @@ public sealed partial class MainActivity : Activity
         details.AddView(fields);
         var failed = snapshot.Reads.Where(r => !r.Readable).Select(r => r.Key + ": " + r.Status).ToArray();
         if (failed.Length > 0) content.AddView(Label("Unavailable reads\n" + string.Join("\n", failed), 12));
-        status.Text = $"{snapshot.Reads.Count(r => r.Readable)}/{snapshot.Reads.Count} queries read · {snapshot.Time:HH:mm:ss}.";
+        status.Text = client!.IsConnected
+            ? $"{snapshot.Reads.Count(r => r.Readable)}/{snapshot.Reads.Count} queries read · {snapshot.Time:HH:mm:ss}."
+            : "Connection lost. Remaining queries were stopped. Stay on the router's Wi-Fi and tap Refresh to reconnect.";
     }
     void ShowDiagnostics(Snapshot snapshot)
     {

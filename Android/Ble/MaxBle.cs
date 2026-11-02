@@ -173,6 +173,7 @@ internal sealed class BleManager : Java.Lang.Object, IBleSetupWire
         8 => "insufficient authorization",
         13 => "value has the wrong length",
         15 => "needs an encrypted link",
+        115 => "unmapped GATT status 0x73; the cause on this firmware is unconfirmed",
         133 => "GATT_ERROR: a connection-level failure (often a stale Bluetooth cache, the link dropping, or the router busy). Not a refusal of the value",
         257 => "generic failure",
         _ => "unrecognized code"
@@ -256,6 +257,7 @@ internal sealed class BleManager : Java.Lang.Object, IBleSetupWire
         using var callback = new GattBridge();
         using var serial = new BluetoothGattCharacteristic(MaxBle.Uuid(MaxBle.Serial), GattProperty.Read, GattPermission.Read);
         using var mac = new BluetoothGattCharacteristic(MaxBle.Uuid(MaxBle.WanMac), GattProperty.Read, GattPermission.Read);
+        using var model = new BluetoothGattCharacteristic(MaxBle.Uuid(MaxBle.ModelNumber), GattProperty.Read, GattPermission.Read);
 #pragma warning disable CA1422
         serial.SetValue("stale-cache");
 #pragma warning restore CA1422
@@ -275,10 +277,13 @@ internal sealed class BleManager : Java.Lang.Object, IBleSetupWire
 #pragma warning restore CA1422
         var legacy = await callback.Read.WaitAsync(TimeSpan.FromSeconds(1), token);
         if (!legacy.SequenceEqual("TESTSERIAL123"u8.ToArray())) throw new InvalidOperationException("Legacy BLE read callback lost its value.");
-        callback.BeginRead(MaxBle.Serial);
-        callback.OnCharacteristicRead(null, serial, (GattStatus)115);
-        try { await callback.Read.WaitAsync(TimeSpan.FromSeconds(1), token); throw new InvalidOperationException("GATT 115 was accepted as a successful read."); }
-        catch (BleReadRejectedException ex) when (ex.Status == 115) { }
+        foreach(var field in new[]{serial,mac,model})
+        {
+            callback.BeginRead(field.Uuid!.ToString()!);
+            callback.OnCharacteristicRead(null, field, (GattStatus)115);
+            try { await callback.Read.WaitAsync(TimeSpan.FromSeconds(1), token); throw new InvalidOperationException("GATT 115 was accepted as a successful identity read."); }
+            catch (BleReadRejectedException ex) when (ex.Status == 115) { }
+        }
         callback.BeginRead(MaxBle.WanMac);
         mac.SetValue("001122334455");
         callback.OnCharacteristicRead(null, mac, GattStatus.Success);

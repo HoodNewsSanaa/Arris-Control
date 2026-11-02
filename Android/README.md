@@ -26,8 +26,9 @@ or Internet connection is needed by these local actions:
    credentials and lets you select a matching local management API.
 3. **Use an existing local admin login** verifies the certificate, exact device serial
    and protected routing mode, then retains the credential using Android Keystore.
-4. Saved routers reconnect locally, including bridge mode when their admin API is
-   reachable. The app does not equate Wi-Fi credentials with admin credentials.
+4. Tap a saved router to reconnect locally, including bridge mode when its admin
+   API is reachable. Startup does not automatically connect or scan the network.
+   The app does not equate Wi-Fi credentials with admin credentials.
 
 Bluetooth bring-up is separate from Wi-Fi management. Fresh routers may expose
 only Bluetooth. **Offline factory setup is experimental and still needs spare-unit

@@ -31,6 +31,18 @@ internal static class BleCaptureSelfTests
             report.Contains("UPGRADING\\u0000\\r\\n"), "Capture lost exact bytes or rejected-read status.");
         Check(calls.Count(c => c == BleSetupProtocol.Serial) == 1 &&
             calls.Count(c => c == BleSetupProtocol.State) == 2, "Capture did not separate baseline and repeated state reads.");
+        var identityFields = new[] { BleSetupProtocol.Serial, BleSetupProtocol.Mac, BleSetupProtocol.Uuid(0xaa06) };
+        var refusedReads = new List<string>();
+        var rejectedIdentity = new BleCapture(map, (uuid, _) =>
+        {
+            refusedReads.Add(uuid);
+            if (identityFields.Contains(uuid)) throw new BleReadRejectedException(115);
+            return Task.FromResult("Readable-state"u8.ToArray());
+        }, "", "");
+        await rejectedIdentity.SnapshotAsync(CancellationToken.None);
+        Check(!rejectedIdentity.Interrupted && identityFields.All(f => refusedReads.Count(u => u == f) == 1) &&
+            refusedReads.Contains(BleSetupProtocol.Uuid(0xaa11)) && rejectedIdentity.Report.Contains("WAN status · 14 bytes"),
+            "Rejected model/serial/MAC reads stopped or retried the remaining state diagnostics.");
         var ambiguous = map.Concat([new BleCaptureCharacteristic(BleSetupProtocol.Uuid(0xab00),
             BleSetupProtocol.State, "Read", true)]).ToList();
         calls.Clear();
@@ -45,6 +57,6 @@ internal static class BleCaptureSelfTests
         using var stop = new CancellationTokenSource(); stop.Cancel();
         await cancelled.RunAsync(TimeSpan.FromMinutes(3), TimeSpan.FromSeconds(5), stop.Token);
         Check(cancelled.Report.Contains("stopped by user/app"), "Cancelled capture did not produce a partial report.");
-        Console.WriteLine("PASS: read-only BLE capture allowlist, exact bytes, GATT 115 continuation, private identities, ambiguous-map refusal and partial reports.");
+        Console.WriteLine("PASS: read-only BLE capture allowlist, exact bytes, GATT 115 continuation including model/serial/MAC rejection, private identities, ambiguous-map refusal and partial reports.");
     }
 }

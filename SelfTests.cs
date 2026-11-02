@@ -14,7 +14,7 @@ internal static class SelfTests
             ["DEVICEOPERMODE_ALL"]=new JsonObject{["STATUS"]="OK",["DEVICEOPERMODE"]=new JsonObject{["MODE"]="DUAL"}},
             ["DEVICE_INFO_ALL"]=JsonNode.Parse("{\"STATUS\":\"OK\",\"DEVICE_INFO\":{\"SERIAL_KEY\":\"TESTSERIAL123\"}}")!.AsObject(),
             ["NETWORKDNS_ALL"]=JsonNode.Parse("{\"STATUS\":\"OK\",\"NETWORKDNS\":{\"DYNAMICV4\":\"0\",\"DNSIPV4SERVERS\":\"8.8.8.8,1.1.1.1\",\"DYNAMICV6\":\"1\",\"DNSIPV6SERVERS\":\"0.0.0.0,0.0.0.0\"}}")!.AsObject()};
-        public int Writes;public bool LoseWriteReply;public int TimeoutsRemaining;
+        public int Writes,Reads;public bool LoseWriteReply,FailRead,StallRead;public int TimeoutsRemaining;
         public Task<JsonObject> SendAsync(string path,string? body=null,CancellationToken token=default)
         {
             if(path=="/setData")
@@ -28,6 +28,9 @@ internal static class SelfTests
                 return Task.FromResult(new JsonObject{["STATUS"]="OK"});
             }
             if(!path.StartsWith("/getData?key=",StringComparison.Ordinal))throw new InvalidOperationException("Unexpected fake request");
+            Reads++;token.ThrowIfCancellationRequested();
+            if(FailRead)throw new HttpRequestException("Fictional unavailable router.");
+            if(StallRead)throw new TaskCanceledException("Fictional read timeout.");
             if(TimeoutsRemaining>0){TimeoutsRemaining--;throw new RouterException("Router status: SessionTimeout","SessionTimeout");}
             return Task.FromResult((JsonObject)State[path[13..]].DeepClone());
         }
@@ -35,6 +38,20 @@ internal static class SelfTests
     }
     static void FeatureTests()
     {
+        Assert(RouterStatus.Routing("BRIDGE","fixture").Value=="Bridge / bypass" &&
+            RouterStatus.Role("MAINAP","fixture").Value=="Primary mesh router" &&
+            RouterStatus.Role("EXTENDER","fixture").Value=="Mesh satellite", "Status lost the distinct mesh/routing modes.");
+        Assert(RouterStatus.Routing("OB","fixture").Level==RouterStatusLevel.Unknown &&
+            RouterStatus.Role("BRIDGE","fixture").Level==RouterStatusLevel.Unknown &&
+            RouterStatus.Role("OB","fixture").Level==RouterStatusLevel.Attention, "Status confused mesh role with routing mode.");
+        foreach(var unknown in new[]{"","UPGRADING","Done","false","UNKNOWN"})
+            Assert(RouterStatus.Onboarding(unknown,"fixture").Level==RouterStatusLevel.Unknown,"An unknown setup value was shown as completed.");
+        Assert(RouterStatus.Onboarding("0","fixture").Value=="Complete" &&
+            RouterStatus.Onboarding("1","fixture").Value=="Incomplete" &&
+            RouterStatus.BluetoothSetup("UPGRADING","fixture").Detail.Contains("does not prove"), "Onboarding status inferred success or an active download.");
+        Assert(RouterStatus.Wan("Up","fixture").Value=="Up" && RouterStatus.Wan("Down","fixture").Level==RouterStatusLevel.Attention &&
+            RouterStatus.Wan("Ready","fixture").Level==RouterStatusLevel.Unknown &&
+            RouterStatus.FirmwareActivity("","","fixture").Level==RouterStatusLevel.Unknown, "Unknown WAN/update values appeared healthy.");
         SettingDefinition Def(string container)=>Settings.Definitions.Single(d=>d.Container==container);
         // New toggles produce a minimal MODIFY envelope for their own container.
         var dfs=Settings.Prepare(Def("WIFI_FH_DFS"),"WIFI_FH_DFS",new JsonObject{["ENABLE"]="1"},new(){["ENABLE"]="0"});
@@ -146,6 +163,21 @@ internal static class SelfTests
             wire.TimeoutsRemaining=0;Assert(wire.Writes==1,"A read retry sent a write.");
         }
         var bridgeWire=new FakeWire();
+        foreach(var timeout in new[]{false,true})
+        {
+            var unavailable=new FakeWire{FailRead=!timeout,StallRead=timeout};
+            using var disconnected=new RouterClient(profile,unavailable);
+            var progress=new List<string>();disconnected.Progress=progress.Add;
+            var page=new Page("lost","Lost connection","",["DEVICEOPERMODE_ALL","NETWORKDNS_ALL","DEVICE_INFO_ALL"]);
+            var stopped=await disconnected.ReadPageAsync(page);
+            Assert(unavailable.Reads==1 && stopped.Reads.Count==1 && !disconnected.IsConnected && unavailable.Writes==0,
+                "A failed transport kept trying every section query or stayed marked connected.");
+            unavailable.FailRead=unavailable.StallRead=false;
+            var refreshed=await disconnected.ReadPageAsync(page);
+            Assert(disconnected.IsConnected && refreshed.Reads.Count==3 && refreshed.Reads.All(r=>r.Readable) && unavailable.Writes==0,
+                "Explicit refresh did not recover page reads after a lost connection.");
+            Assert(progress.Any(p=>p.Contains("1/3")) && progress.Any(p=>p.Contains("3/3")),"Page loading did not report query progress.");
+        }
         using(var client=new RouterClient(profile,bridgeWire))
         {
             var enabled=await client.ApplyAsync(bridge);
