@@ -38,7 +38,8 @@ public sealed partial class MainActivity
                         // Probe only known addresses and gateways. Never run a subnet scan in the background.
                         var endpoints=await RouterDiscovery.DiscoverApisAsync(candidates,null,token);
                         if(token.IsCancellationRequested)return;
-                        if(key!=AndroidNetwork.ConnectionKey || version!=interactionVersion || busy || dirty || ble is not null)
+                        if(key!=AndroidNetwork.ConnectionKey || version!=interactionVersion || busy || dirty || ble is not null ||
+                            !GetSharedPreferences("connection",Android.Content.FileCreationMode.Private)!.GetBoolean("autoSavedRouters",true))
                         {await Task.Delay(3000,token);continue;}
                         var matches=LocalAdminAccess.MatchSaved(records,endpoints);
                         var last=GetSharedPreferences("connection",Android.Content.FileCreationMode.Private)!.GetString("serial","");

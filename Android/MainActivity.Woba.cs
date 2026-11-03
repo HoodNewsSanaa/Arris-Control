@@ -25,10 +25,14 @@ public sealed partial class MainActivity
         Shell("WOBA local setup");backAction=BackToStart;
         var intro=Card("WOBA access and settings","Keep WOBA active while using the full local settings interface. Inspect the router, then reuse a saved admin login or establish one through WOBA. Settings use that local login; no ARRIS account or onboarding completion is required.");
         var target=Input(intro,"Router IPv4 address",previous);
+        CheckScanNetwork();
+        var knownNetwork=AndroidNetwork.ConnectionKey;
         var knownPins=new Dictionary<string,string>(scannedPins,StringComparer.Ordinal);
         Action(intro,"Find routers on this Wi-Fi",async()=>
         {
-            AndroidNetwork.UseLocal();var results=await RouterDiscovery.DiscoverApisAsync(AndroidNetwork.Candidates(),null,lifetime.Token);
+            AndroidNetwork.UseLocal();knownNetwork=AndroidNetwork.ConnectionKey;
+            var results=await RouterDiscovery.DiscoverApisAsync(AndroidNetwork.Candidates(),null,lifetime.Token);
+            if(knownNetwork!=AndroidNetwork.ConnectionKey)throw new RouterException("Wi-Fi changed during discovery. Search again on the current network.");
             if(results.Count==0)throw new RouterException("No local admin API answered. A factory-reset unit may need Bluetooth bring-up first.");
             var choice=await Choose("Select your router",results.Select(r=>r.Address+" · key "+r.Fingerprint).ToArray());
             if(choice<0)return;target.Text=results[choice].Address;knownPins[results[choice].Address]=results[choice].Pin;
@@ -36,6 +40,7 @@ public sealed partial class MainActivity
         Action(intro,"Inspect WOBA access (no settings changes)",async()=>
         {
             AndroidNetwork.UseLocal();
+            if(knownNetwork!=AndroidNetwork.ConnectionKey){knownPins.Clear();knownNetwork=AndroidNetwork.ConnectionKey;}
             var endpoint=await RouterDiscovery.ProbeApiAsync(target.Text?.Trim()??"",lifetime.Token)??throw new RouterException("The local ARRIS API did not answer with a valid device certificate. Check Wi-Fi and Bluetooth bring-up.");
             if(knownPins.TryGetValue(endpoint.Address,out var expectedPin) && endpoint.Pin!=expectedPin)throw new RouterException("The certificate key changed since discovery. No WOBA login was sent.");
             knownPins[endpoint.Address]=endpoint.Pin;

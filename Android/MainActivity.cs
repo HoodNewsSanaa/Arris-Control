@@ -31,6 +31,12 @@ public sealed partial class MainActivity : Activity
     bool busy, dirty;
     // Certificate pins seen by the last scan, so first-time verification requires the same certificate.
     readonly Dictionary<string, string> scannedPins = new(StringComparer.Ordinal);
+    string scannedNetwork="";
+    void CheckScanNetwork()
+    {
+        var network=AndroidNetwork.ConnectionKey;
+        if(network!=scannedNetwork){scannedPins.Clear();scannedNetwork=network;}
+    }
     const int ImportReference = 41;
     const int BlePermissions = 42;
     TaskCompletionSource<bool>? permissionResult;
@@ -467,17 +473,20 @@ public sealed partial class MainActivity : Activity
             if (!await done.Task) return;
             if (string.IsNullOrEmpty(user.Text) || string.IsNullOrEmpty(pass.Text)) throw new RouterException("Enter the local management username and password.");
             var credential = new RouterCredential(user.Text.Trim(), pass.Text); pass.Text = "";
-            var target=address.Text!.Trim(); AndroidNetwork.UseLocal(); status.Text="Verifying the local login and reading router identity…";
+            var target=address.Text!.Trim(); AndroidNetwork.UseLocal(); CheckScanNetwork(); status.Text="Verifying the local login and reading router identity…";
             var record=await LocalAdminAccess.LoginAndSaveAsync(target,credential,lifetime.Token,scannedPins.GetValueOrDefault(target));
             acquired=null; await Connect(record);
     }
     async Task ScanRouters()
     {
         AndroidNetwork.UseLocal();
+        CheckScanNetwork();
+        var scanNetwork=AndroidNetwork.ConnectionKey;
         status.Text = "Scanning your local network…";
         var candidates = AndroidNetwork.Candidates().Distinct().Take(1024).ToArray();
         var progress = new Progress<ScanProgress>(p => status.Text = $"Checking ARRIS APIs: {p.Checked}/{p.Total} addresses…");
         var results = await RouterDiscovery.DiscoverApisAsync(candidates, progress, lifetime.Token);
+        if(scanNetwork!=AndroidNetwork.ConnectionKey)throw new RouterException("Wi-Fi changed during discovery. Tap Find on the current network.");
         if (results.Count == 0)
         {
             await Message("No ARRIS API found", "No matching ARRIS HTTPS API responded on this connected subnet. Check the Wi-Fi connection, client isolation, and the unit's power/cabling. The scan sends no credentials.");
