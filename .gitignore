@@ -12,6 +12,7 @@ Credentials/
 .reports/
 .firmware-downloads/
 *.pfx
+*.p12
 *.pem
 *.key
 *.apk
@@ -21,3 +22,13 @@ source-review/
 *.tar.gz
 *.tgz
 discovery-test-*/
+
+artifacts/
+*.keystore
+*.jks
+local.properties
+__pycache__/
+*.pyc
+# Private SURFboard reference for personal builds; never commit.
+protocol.local.json
+Android/protocol.local.json

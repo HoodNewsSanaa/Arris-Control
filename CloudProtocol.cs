@@ -29,6 +29,16 @@ internal static class CloudProtocol
         if(Names.Any(n=>!values.ContainsKey(n)))throw new RouterException("The reference is missing ARRIS cloud protocol constants.");
         var configuration=new CloudConfiguration(values[Names[0]],values[Names[1]],values[Names[2]],values[Names[3]]);configuration.Validate();return configuration;
     }
+    public static CloudConfiguration ReadReferences(IEnumerable<string> paths)
+    {
+        foreach(var path in paths.Where(File.Exists).Distinct())
+        {
+            try { return ReadReference(path); }
+            catch(RouterException) { /* BuildConfig can live in a split APK rather than the base APK. */ }
+            catch(UnauthorizedAccessException) { }
+        }
+        throw new RouterException("The installed APK/splits do not expose the supported ARRIS configuration. Import your own SURFboard Central 4.3.5 APK/XAPK or BuildConfig.java. No app was installed or executed.");
+    }
     public static CloudConfiguration ReadReference(string path)
     {
         try
@@ -79,11 +89,11 @@ internal static class CloudProtocol
         try
         {
             using var json=JsonDocument.Parse(File.ReadAllBytes(file));var cipher=Convert.FromBase64String(json.RootElement.GetProperty("Ciphertext").GetString()!);
-            plain=ProtectedData.Unprotect(cipher,Entropy,DataProtectionScope.CurrentUser);
+            plain=CredentialProtection.Unprotect(cipher,Entropy);
             var configuration=JsonSerializer.Deserialize<CloudConfiguration>(plain)??throw new RouterException("Invalid protected protocol configuration.");configuration.Validate();return configuration;
         }
         catch(Exception ex) when(ex is CryptographicException or JsonException or FormatException or IOException)
-        {throw new RouterException("Windows could not load the saved protocol reference. Select the APK/XAPK reference again.");}
+        {throw new RouterException("This device could not load the saved protocol reference. Select the APK/XAPK reference again.");}
         finally{if(plain is not null)CryptographicOperations.ZeroMemory(plain);}
     }
     public static void Save(CloudConfiguration configuration)
@@ -91,13 +101,35 @@ internal static class CloudProtocol
         configuration.Validate();var plain=JsonSerializer.SerializeToUtf8Bytes(configuration);byte[]? check=null;
         try
         {
-            var cipher=ProtectedData.Protect(plain,Entropy,DataProtectionScope.CurrentUser);check=ProtectedData.Unprotect(cipher,Entropy,DataProtectionScope.CurrentUser);
+            var cipher=CredentialProtection.Protect(plain,Entropy);check=CredentialProtection.Unprotect(cipher,Entropy);
             if(!CryptographicOperations.FixedTimeEquals(plain,check))throw new RouterException("Protocol protection round-trip failed.");
             Directory.CreateDirectory(Folder);var file=Path.Combine(Folder,$"protocol-{DateTime.UtcNow:yyyyMMddTHHmmssfffffffZ}-{Guid.NewGuid():N}.json");
-            File.WriteAllText(file,JsonSerializer.Serialize(new{Format="ARRIS-CloudProtocol",Version=1,Protection="Windows DPAPI CurrentUser",Ciphertext=Convert.ToBase64String(cipher)}));
+            File.WriteAllText(file,JsonSerializer.Serialize(new{Format="ARRIS-CloudProtocol",Version=1,Protection=CredentialProtection.Description,Ciphertext=Convert.ToBase64String(cipher)}));
         }
-        catch(CryptographicException){throw new RouterException("Windows could not protect the protocol reference. No plaintext fallback is used.");}
+        catch(CryptographicException){throw new RouterException("This device could not protect the protocol reference. No plaintext fallback is used.");}
         finally{CryptographicOperations.ZeroMemory(plain);if(check is not null)CryptographicOperations.ZeroMemory(check);}
+    }
+    // Personal builds may embed the reference as this resource (from a gitignored
+    // Android/protocol.local.json). Public/CI builds never contain it.
+    public const string EmbeddedResourceName="ArrisControl.protocol.local.json";
+    public static string ToJson(CloudConfiguration configuration)
+    {
+        configuration.Validate();
+        return JsonSerializer.Serialize(new Dictionary<string,string>{[Names[0]]=configuration.Pool,[Names[1]]=configuration.ClientId,
+            [Names[2]]=configuration.ClientSecret,[Names[3]]=configuration.AccountBase},new JsonSerializerOptions{WriteIndented=true});
+    }
+    public static CloudConfiguration FromJson(string json)
+    {
+        Dictionary<string,string>? values;
+        try{values=JsonSerializer.Deserialize<Dictionary<string,string>>(json);}
+        catch(JsonException){throw new RouterException("The bundled SURFboard reference is not valid JSON.");}
+        return FromConstants(values??throw new RouterException("The bundled SURFboard reference is empty."));
+    }
+    public static CloudConfiguration? LoadEmbedded()
+    {
+        using var stream=typeof(CloudProtocol).Assembly.GetManifestResourceStream(EmbeddedResourceName);
+        if(stream is null)return null;
+        using var reader=new StreamReader(stream);return FromJson(reader.ReadToEnd());
     }
     public static CloudConfiguration? Discover()
     {

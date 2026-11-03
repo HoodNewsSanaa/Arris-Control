@@ -46,6 +46,7 @@ internal static class CloudSelfTests
     }
     public static async Task RunAsync()
     {
+        await LocalLoginAndMatching();
         var assembly=Assembly.GetExecutingAssembly();using var vectorStream=assembly.GetManifestResourceStream(assembly.GetManifestResourceNames().Single(n=>n.EndsWith("srp-test-vector.json",StringComparison.Ordinal)))!;
         var vector=JsonNode.Parse(vectorStream)!;string V(string key)=>Catalog.Text(vector[key]);var srp=new CognitoSrp(V("Pool"),V("PrivateA"));
         Assert(srp.PublicA==V("PublicA") && srp.Sign(V("User"),V("Password"),V("ServerB"),V("Salt"),V("SecretBlock"),V("Timestamp"))==V("Signature"),"Embedded SRP regression vector failed.");
@@ -63,11 +64,16 @@ internal static class CloudSelfTests
         Assert(refused && extraChallenge.Operations.Count==1,"Unsupported challenge continued into account/router access.");
         using var missing=new FakeCloud{MissingSso=true};refused=false;try{await CloudAcquisition.AcquireAsync("fictional@example.com","FictionalCloudPassword123!",Config,missing);}catch(RouterException){refused=true;}
         Assert(refused,"Missing account credential was fabricated or accepted.");
-        var directory=Path.Combine(AppContext.BaseDirectory,"cloud-selftest-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(directory);
+        var directory=Path.Combine(Path.GetTempPath(),"cloud-selftest-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(directory);
         try
         {
             var java=Path.Combine(directory,"BuildConfig.java");File.WriteAllText(java,string.Join('\n',Names.Select((n,i)=>$"public static final String {n} = \"{Values[i]}\";")));
             Assert(CloudProtocol.ReadReference(java)==Config,"Java protocol constant extraction failed.");
+            Assert(CloudProtocol.FromJson(CloudProtocol.ToJson(Config))==Config,"Bundled protocol reference JSON did not round-trip.");
+            Assert(CloudProtocol.LoadEmbedded() is null,"A protocol reference is embedded in a test/CI build; it must only exist in personal builds.");
+            var unsupported=Path.Combine(directory,"base.apk");
+            using(var baseFile=File.Create(unsupported))using(var archive=new ZipArchive(baseFile,ZipArchiveMode.Create))archive.CreateEntry("placeholder");
+            Assert(CloudProtocol.ReadReferences([unsupported,java])==Config,"Installed-reference fallback did not check later APK/split sources.");
             using var apkMemory=new MemoryStream();using(var apk=new ZipArchive(apkMemory,ZipArchiveMode.Create,true)){using var stream=apk.CreateEntry("classes.dex").Open();stream.Write(DexFixture());}
             var apkBytes=apkMemory.ToArray();var apkFile=Path.Combine(directory,"reference.apk");File.WriteAllBytes(apkFile,apkBytes);Assert(CloudProtocol.ReadReference(apkFile)==Config,"DEX protocol extraction failed.");
             var xapkFile=Path.Combine(directory,"reference.xapk");using(var file=File.Create(xapkFile))using(var zip=new ZipArchive(file,ZipArchiveMode.Create)){using var stream=zip.CreateEntry("com.arris.sbc.apk").Open();stream.Write(apkBytes);}
@@ -76,21 +82,96 @@ internal static class CloudSelfTests
         }
         finally{foreach(var file in Directory.EnumerateFiles(directory))File.Delete(file);Directory.Delete(directory,false);}
     }
+    sealed class LocalLoginFixture : IRouterWire
+    {
+        public readonly List<string> Calls=[];
+        public string Serial="TESTSERIAL123",Mode="BRIDGE";
+        public bool RejectLogin;
+        public Task<JsonObject> SendAsync(string path,string? body=null,CancellationToken token=default)
+        {
+            token.ThrowIfCancellationRequested();Calls.Add(path);
+            if(path=="/loginAction")
+            {
+                if(RejectLogin)throw new RouterException("Incorrect login","IncorrectCredentials");
+                return Task.FromResult(new JsonObject{["STATUS"]="OK"});
+            }
+            if(body is not null)throw new InvalidOperationException("Local login attempted a configuration write.");
+            return Task.FromResult(path switch{
+                "/getData?key=DEVICE_INFO_ALL"=>new JsonObject{["DEVICE_INFO"]=new JsonObject{["SERIAL_KEY"]=Serial,["MODEL_NAME"]="W30"}},
+                "/getData?key=DEVICEOPERMODE_ALL"=>new JsonObject{["DEVICEOPERMODE"]=new JsonObject{["MODE"]=Mode}},
+                _=>throw new InvalidOperationException("Unexpected local login query.")});
+        }
+        public void Dispose(){}
+    }
+    static async Task LocalLoginAndMatching()
+    {
+        var pinA=Convert.ToBase64String(SHA256.HashData("fictional router A"u8.ToArray()));
+        var pinB=Convert.ToBase64String(SHA256.HashData("fictional router B"u8.ToArray()));
+        var endpoint=new RouterApiEndpoint("192.168.1.1","001122334455","SessionTimeout",pinA);
+        var credential=new RouterCredential("admin","FictionalLocalPassword123!");
+        using var fixture=new LocalLoginFixture();
+        var identity=await LocalAdminAccess.VerifyAsync(fixture,endpoint,credential,default);
+        Assert(identity==new CloudDevice("W30","TESTSERIAL123","001122334455"),"Local login did not learn identity without user-entered serial/MAC.");
+        Assert(fixture.Calls.SequenceEqual(new[]{"/loginAction","/getData?key=DEVICE_INFO_ALL","/getData?key=DEVICEOPERMODE_ALL"}),"Local login performed unexpected operations.");
+        foreach(var bad in new[]{new LocalLoginFixture{Serial=""},new LocalLoginFixture{Mode="OB"},new LocalLoginFixture{RejectLogin=true}})
+        {
+            bool refused=false;try{await LocalAdminAccess.VerifyAsync(bad,endpoint,credential,default);}catch(RouterException){refused=true;}
+            Assert(refused,"Invalid local login/identity/mode was accepted.");
+            if(bad.RejectLogin)Assert(bad.Calls.Count==1,"Rejected login continued to protected reads.");
+        }
+        using var invalid=new LocalLoginFixture();
+        bool invalidRefused=false;try{await LocalAdminAccess.VerifyAsync(invalid,endpoint with{Pin="invalid"},credential,default);}catch(RouterException){invalidRefused=true;}
+        Assert(invalidRefused&&invalid.Calls.Count==0,"Credentials were sent before endpoint validation.");
+        var a=new CredentialRecord("a","TESTSERIAL123","001122334455","192.168.1.1");
+        var b=new CredentialRecord("b","TESTSERIAL456","001122334455","192.168.1.1");
+        RouterCredential Load(CredentialRecord r)=>credential with{CertificatePin=r.Path=="a"?pinA:pinB};
+        var matches=LocalAdminAccess.MatchSaved([a,b],[endpoint],Load);
+        Assert(matches.Count==1 && matches[0].Record==a,"Router A selected another network's credentials.");
+        matches=LocalAdminAccess.MatchSaved([a,b],[endpoint with{Pin=pinB}],Load);
+        Assert(matches.Count==1 && matches[0].Record==b,"Router B selected another network's credentials.");
+        Assert(LocalAdminAccess.MatchSaved([a,b],[endpoint with{Pin=Convert.ToBase64String(new byte[32])}],Load).Count==0,"An unknown key selected saved credentials.");
+        Assert(LocalAdminAccess.MatchSaved([a],[endpoint],_=>credential).Count==0,"An unpinned legacy login was automatically selected.");
+        Console.WriteLine("PASS: local admin identity discovery without serial/MAC input; protected-mode/login rejection; separate saved credentials on networks with identical addresses and copied MACs.");
+    }
     static void TestPersistence(AcquiredCredential acquired,string directory)
     {
         // Use fictional data only. Restricted tool profiles may lack DPAPI;
         // a successful Windows profile must pass actual disk round-trips.
-        try{var probe=ProtectedData.Protect([1,2,3],null,DataProtectionScope.CurrentUser);CryptographicOperations.ZeroMemory(probe);}
+        try{var probe=CredentialProtection.Protect([1,2,3],null);CryptographicOperations.ZeroMemory(probe);}
         catch(CryptographicException){Console.WriteLine("SKIP: DPAPI persistence fixture unavailable in this restricted Windows profile; no plaintext fallback or file written.");return;}
-        var device=acquired.Devices.Single();var first=CredentialStore.SaveVerified(acquired.Credential,device,"192.168.7.1",directory);
-        var second=CredentialStore.SaveVerified(acquired.Credential,device,"192.168.7.1",directory);
+        var pin=Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes("fictional router public key")));
+        var device=acquired.Devices.Single();var first=CredentialStore.SaveVerified(acquired.Credential,device,"192.168.7.1",pin,directory);
+        var second=CredentialStore.SaveVerified(acquired.Credential,device,"192.168.7.1",pin,directory);
         Assert(first.Path!=second.Path && File.Exists(first.Path)&&File.Exists(second.Path),"Credential versions were overwritten.");
-        var loaded=CredentialStore.Load(first,false);Assert(loaded==acquired.Credential,"Protected credential disk round-trip failed.");
+        var loaded=CredentialStore.Load(first,false);Assert(loaded==(acquired.Credential with{CertificatePin=pin}),"Protected credential and certificate pin disk round-trip failed.");
         Assert(!File.ReadAllText(first.Path).Contains(acquired.Credential.Password),"Plaintext router password written to disk.");
+        Assert(!File.ReadAllText(first.Path).Contains(pin),"Certificate pin stored outside the encrypted payload.");
+        var unpinned=false;try{CredentialStore.SaveVerified(acquired.Credential,device,"192.168.7.1","not-a-pin",directory);}catch(RouterException){unpinned=true;}
+        Assert(unpinned,"A credential was saved without a valid certificate pin.");
+        // A record saved before pinning existed loads without a pin, then upgrades to a new pinned version.
+        var legacy=WriteRecord(acquired.Credential,device,directory,"legacy.json",null);
+        var legacyCredential=CredentialStore.Load(legacy,false);Assert(legacyCredential.CertificatePin is null,"A legacy credential gained a pin without verification.");
+        var upgraded=CredentialStore.SavePinned(legacy,legacyCredential,"192.168.7.1",pin,directory);
+        Assert(upgraded.Path!=legacy.Path && File.Exists(legacy.Path) && CredentialStore.Load(upgraded,false).CertificatePin==pin,"Legacy credential pin upgrade failed or overwrote the original.");
+        var corrupt=WriteRecord(acquired.Credential,device,directory,"corrupt-pin.json","not-a-pin");
+        var rejected=false;try{CredentialStore.Load(corrupt,false);}catch(RouterException){rejected=true;}
+        Assert(rejected,"An invalid encrypted certificate pin was accepted.");
         var pending=AcquisitionStore.Save(acquired,directory);var restored=AcquisitionStore.Load(pending,false);
         Assert(restored.Credential==acquired.Credential && restored.Devices.SequenceEqual(acquired.Devices),"Acquisition disk round-trip failed.");
         Assert(!File.ReadAllText(pending).Contains(acquired.Credential.Password),"Plaintext acquired credential written to disk.");
-        Console.WriteLine("PASS: Windows DPAPI disk round-trips and retention of distinct credential versions (fictional data only).");
+        Console.WriteLine("PASS: encrypted disk round-trips, encrypted certificate pins, legacy pin upgrade and retention of distinct credential versions (fictional data only).");
+    }
+    // Writes a record the way earlier versions did: the encrypted payload carries only the login
+    // unless a pin is supplied. Fictional data only.
+    static CredentialRecord WriteRecord(RouterCredential credential,CloudDevice device,string directory,string name,string? pin)
+    {
+        var payload=new JsonObject{["UserName"]=credential.UserName,["Password"]=credential.Password};
+        if(pin is not null)payload["CertificatePin"]=pin;
+        var cipher=CredentialProtection.Protect(Encoding.UTF8.GetBytes(payload.ToJsonString()),Encoding.UTF8.GetBytes($"ArrisLocalCredential.v1|{device.Serial}|{device.Mac}"));
+        var file=Path.Combine(directory,name);
+        File.WriteAllText(file,new JsonObject{["Format"]="ARRIS-LocalCredential",["Version"]=1,["TargetSerial"]=device.Serial,["ExpectedMac"]=device.Mac,
+            ["RouterAddress"]="192.168.7.1",["Ciphertext"]=Convert.ToBase64String(cipher)}.ToJsonString());
+        return CredentialStore.Inspect(file);
     }
     static byte[] DexFixture()
     {
