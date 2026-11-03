@@ -23,11 +23,15 @@ internal static class RouterNetworkSelfTests
         var pin=endpoints[0].Pin;
         var directory=Path.Combine(Path.GetTempPath(),"router-network-test-"+Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
-        string? updatedPath=null, preservedPath=null, pinnedPath=null, legacyPreserved=null, offlinePath=null, wobaPath=null;
+        string? updatedPath=null, preservedPath=null, pinnedPath=null, legacyPreserved=null, offlinePath=null, wobaPath=null, localLoginPath=null;
         try
         {
             var device=new CloudDevice("Fixture mAX","TESTSERIAL123",mac);
             var login=new RouterCredential("test@example.com","FictionalLocalPassword123!");
+            var direct=await LocalAdminAccess.LoginAndSaveAsync(host,login,token,pin);
+            localLoginPath=direct.Path;
+            if(direct.Serial!=device.Serial || direct.Mac!=mac || CredentialStore.Load(direct,false).CertificatePin!=pin)
+                throw new InvalidOperationException("Local admin login failed to learn and retain the router identity without serial/MAC input.");
             var saved=CredentialStore.SaveVerified(login,device,"10.0.2.3",pin,directory);
             var hash=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(saved.Path)));
             preservedPath=Path.Combine(CredentialStore.UserDirectory,$"loaded-{saved.Serial}-{saved.Mac}-{hash}.json");
@@ -142,6 +146,7 @@ internal static class RouterNetworkSelfTests
             if(legacyPreserved is not null && File.Exists(legacyPreserved)) File.Delete(legacyPreserved);
             if(offlinePath is not null && File.Exists(offlinePath)) File.Delete(offlinePath);
             if(wobaPath is not null && File.Exists(wobaPath)) File.Delete(wobaPath);
+            if(localLoginPath is not null && File.Exists(localLoginPath)) File.Delete(localLoginPath);
             foreach(var path in Directory.EnumerateFiles(directory)) File.Delete(path);
             Directory.Delete(directory);
         }

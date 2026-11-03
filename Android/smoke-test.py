@@ -37,10 +37,10 @@ for _ in range(45):
     adb('shell', 'uiautomator', 'dump', '/sdcard/arris-ui.xml')
     ui = adb('shell', 'cat', '/sdcard/arris-ui.xml')
     if 'PASS: Android API scan, HTTPS login and reconnect.' in ui:
-        # Five original normal sessions plus three fresh logins for local completion
+        # Five original sessions, one identity-discovering login, plus three completion logins
         # review, pre-write checks and post-write verification. One completion write.
-        if fixture.logins != 8 or fixture.anonymous_reads < 1 or fixture.protected_reads < 10 or fixture.webui_writes != 2 or fixture.webui != "0" or fixture.lookup_writes != 2 or fixture.woba_logins != 2 or fixture.woba_writes != 1 or fixture.completion_writes != 1 or fixture.onboarding != '0' or fixture.ble_service != '0' or fixture.lookup_source != "https://plt.surfboardconnect.com/manifest":
-            annotate(f'Fixture counters: logins={fixture.logins} (expected 8), anonymous_reads={fixture.anonymous_reads}, protected_reads={fixture.protected_reads} (expected >= 10), completion_writes={fixture.completion_writes}')
+        if fixture.logins != 9 or fixture.anonymous_reads < 1 or fixture.protected_reads < 10 or fixture.webui_writes != 2 or fixture.webui != "0" or fixture.lookup_writes != 2 or fixture.woba_logins != 2 or fixture.woba_writes != 1 or fixture.completion_writes != 1 or fixture.onboarding != '0' or fixture.ble_service != '0' or fixture.lookup_source != "https://plt.surfboardconnect.com/manifest":
+            annotate(f'Fixture counters: logins={fixture.logins} (expected 9), anonymous_reads={fixture.anonymous_reads}, protected_reads={fixture.protected_reads} (expected >= 10), completion_writes={fixture.completion_writes}')
             raise SystemExit('Fixture did not observe exactly eight normal sessions, two isolated WOBA logins and one verified local completion request')
         print('PASS: APK UI, Android Keystore, anonymous API scan, actual HTTPS login/cookies, saved address update, reconnect, certificate-pin impostor refusal, legacy pin upgrade and pending offline-login verification without cloud.')
         adb('root')

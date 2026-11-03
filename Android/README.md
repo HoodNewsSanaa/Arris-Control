@@ -24,10 +24,16 @@ or Internet connection is needed by these local actions:
    once, then asks you to join Wi-Fi and verify a normal authenticated local login.
 2. **Find ARRIS routers on this Wi-Fi** probes the current connected subnet without
    credentials and lets you select a matching local management API.
-3. **Use an existing local admin login** verifies the certificate, exact device serial
-   and protected routing mode, then retains the credential using Android Keystore.
+3. **Use an existing local admin login** asks only for the address, username and
+   admin password. It discovers the certificate MAC, pins that key before login,
+   reads the authenticated serial and routing mode, and saves the login using Android Keystore.
 4. Tap a saved router to reconnect locally, including bridge mode when its admin
-   API is reachable. Startup does not automatically connect or scan the network.
+   API is reachable. Each router has a separate saved login. On startup and Wi-Fi changes,
+   a background check of saved addresses and local gateways selects the matching pinned
+   router automatically. No full subnet scan runs automatically. Disable automatic
+   matching on the connection screen if desired. Changed bridge-mode addresses may
+   need one manual Find. When several saved routers answer, the last selected router
+   is preferred; otherwise choose one under Connections.
    The app does not equate Wi-Fi credentials with admin credentials.
 
 Bluetooth bring-up is separate from Wi-Fi management. Fresh routers may expose

@@ -329,7 +329,7 @@ internal sealed partial class RouterClient : IDisposable
         }
         finally{CryptographicOperations.ZeroMemory(bytes);}
     }
-    public async Task ConnectAsync(CancellationToken token=default)
+    public async Task ConnectAsync(CancellationToken token=default,bool savedAddressOnly=false)
     {
         if(testTransport){authenticated=true;return;}
 #if ANDROID
@@ -345,7 +345,9 @@ internal sealed partial class RouterClient : IDisposable
         // The pin comes from the encrypted payload, never from editable record metadata.
         var credential=CredentialStore.Load(previous);pin=CertificatePin.ForReconnect(credential.CertificatePin,pin);
         Progress?.Invoke(pin is null?"Checking the saved router address (certificate not yet pinned)…":"Locating the selected router on local networks…");
-        var address=await RouterDiscovery.ResolveAsync(record,pin,token);
+        var address=savedAddressOnly
+            ? await RouterDiscovery.MatchesAsync(record.Address,record.Mac,pin,token)?record.Address:throw new RouterException("The saved router is no longer at this address. Use Find ARRIS routers to locate it.")
+            : await RouterDiscovery.ResolveAsync(record,pin,token);
         wire.Dispose();var local=new LocalWire(record with{Address=address},pin);wire=local;
         Progress?.Invoke("Verifying local router identity at "+address+"…");
         OnboardingStatus="";BluetoothServiceStatus="";LoginObservedAt=null;

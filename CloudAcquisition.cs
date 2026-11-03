@@ -15,6 +15,48 @@ internal sealed record AcquiredCredential(RouterCredential Credential,List<Cloud
 {
     public override string ToString()=>"Acquired router credential (values withheld)";
 }
+internal static class LocalAdminAccess
+{
+    public static async Task<CredentialRecord> LoginAndSaveAsync(string address,RouterCredential credential,CancellationToken token=default,string? expectedPin=null)
+    {
+        if(!CredentialStore.IsPrivate(address))throw new RouterException("Enter the router's private IPv4 address.");
+        if(string.IsNullOrWhiteSpace(credential.UserName)||string.IsNullOrEmpty(credential.Password))throw new RouterException("Enter the local admin username and password.");
+        var endpoint=await RouterDiscovery.ProbeApiAsync(address,token)??throw new RouterException("No ARRIS management API answered at this address. Check the address or use Find ARRIS routers.");
+        if(expectedPin is not null && expectedPin!=endpoint.Pin)throw new RouterException("The router's certificate changed since selection. No login was sent.");
+        using var wire=new LocalWire(new("","",endpoint.Mac,address),endpoint.Pin);
+        var device=await VerifyAsync(wire,endpoint,credential,token);
+        return CredentialStore.SaveVerified(credential,device,address,endpoint.Pin,verifiedVia:"Local admin login; identity read from protected API and certificate pinned before credentials were sent");
+    }
+    internal static async Task<CloudDevice> VerifyAsync(IRouterWire wire,RouterApiEndpoint endpoint,RouterCredential credential,CancellationToken token)
+    {
+        if(!CredentialStore.IsPrivate(endpoint.Address)||!CertificatePin.IsValid(endpoint.Pin)||!Regex.IsMatch(endpoint.Mac,"^[A-F0-9]{12}$"))
+            throw new RouterException("A verified local ARRIS endpoint is required. No login was sent.");
+        await wire.SendAsync("/loginAction",RouterClient.LoginBody(credential.UserName,credential.Password,"local_admin_"+Guid.NewGuid().ToString("N"),DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()),token);
+        var identity=await wire.SendAsync("/getData?key=DEVICE_INFO_ALL",null,token);
+        var serial=Catalog.Text(identity["DEVICE_INFO"]?["SERIAL_KEY"]).Trim().ToUpperInvariant();
+        if(!Regex.IsMatch(serial,"^[A-Z0-9]{12,24}$"))throw new RouterException("The authenticated router did not return a valid serial. No login was saved.");
+        var mode=await wire.SendAsync("/getData?key=DEVICEOPERMODE_ALL",null,token);
+        if(Catalog.Text(mode["DEVICEOPERMODE"]?["MODE"]) is not ("DUAL" or "IPV4ONLY" or "BRIDGE"))
+            throw new RouterException("No recognized protected routing mode was returned. No login was saved.");
+        var model=Catalog.Text(identity["DEVICE_INFO"]?["MODEL_NAME"]);
+        return new(model.Length>0?model:"ARRIS mAX",serial,endpoint.Mac);
+    }
+    internal static List<(CredentialRecord Record,RouterApiEndpoint Endpoint)> MatchSaved(IEnumerable<CredentialRecord> records,IEnumerable<RouterApiEndpoint> endpoints,
+        Func<CredentialRecord,RouterCredential>? load=null)
+    {
+        load??=r=>CredentialStore.Load(r,false);
+        var matches=new List<(CredentialRecord,RouterApiEndpoint)>();
+        foreach(var record in records)
+        {
+            RouterCredential credential;
+            try{credential=load(record);}catch(Exception ex) when(ex is RouterException or IOException or System.Security.Cryptography.CryptographicException or System.Text.Json.JsonException or FormatException){continue;}
+            if(!CertificatePin.IsValid(credential.CertificatePin))continue;
+            foreach(var endpoint in endpoints.Where(e=>e.Mac==record.Mac && e.Pin==credential.CertificatePin && CredentialStore.IsPrivate(e.Address)))
+                matches.Add((record,endpoint));
+        }
+        return matches;
+    }
+}
 internal interface ICloudApi : IDisposable
 {
     Task<JsonObject> CognitoAsync(string operation,JsonObject body,CancellationToken token);

@@ -42,6 +42,7 @@ public sealed partial class MainActivity : Activity
     Button? updateShortcut;
     CancellationTokenSource? updateDownload;
     bool downloadedUpdate;
+    int interactionVersion;
 
     protected override void OnCreate(Bundle? state)
     {
@@ -131,11 +132,17 @@ public sealed partial class MainActivity : Activity
     {
         base.OnResume();
         if (networkStatus is not null) networkStatus.Text = AndroidNetwork.Status();
+        StartSavedRouterMatching();
+    }
+    protected override void OnPause()
+    {
+        savedRouterMatching?.Cancel();
+        base.OnPause();
     }
     protected override void OnDestroy()
     {
         bleCaptureStop?.Cancel();
-        updateDownload?.Cancel(); lifetime.Cancel(); client?.Dispose(); ble?.Dispose(); AndroidNetwork.UseInternet();
+        updateDownload?.Cancel(); lifetime.Cancel(); client?.Dispose(); managementWoba?.Dispose(); ble?.Dispose(); AndroidNetwork.UseInternet();
         lifetime.Dispose(); base.OnDestroy();
     }
     int Dp(int n) => (int)(n * Resources!.DisplayMetrics!.Density);
@@ -276,6 +283,7 @@ public sealed partial class MainActivity : Activity
     async Task Run(Func<Task> action, bool quiet = false)
     {
         if (busy) return;
+        interactionVersion++;
         busy = true; activityProgress.Visibility = ViewStates.Visible; foreach (var b in buttons) b.Enabled = false;
         try { await action(); }
         catch (System.OperationCanceledException) { if (!IsDestroyed) status.Text = "Operation cancelled."; }
@@ -390,6 +398,10 @@ public sealed partial class MainActivity : Activity
             var saved = Card("Your routers", "Use the saved normal admin login. It does not require onboarding mode or router Bluetooth. Tap a router to connect or find its current address.",
                 chipText: records.Count == 1 ? "Saved" : records.Count + " saved", chipColor: Palette.Success);
             foreach (var record in records) Action(saved, "Connect\n" + record.Serial, () => Connect(record, AddressOverride()), Tone.Primary);
+            var automatic=new CheckBox(this){Text="Automatically connect to saved routers on this Wi-Fi",Checked=prefs.GetBoolean("autoSavedRouters",true)};
+            automatic.SetTextColor(Palette.Text);
+            automatic.CheckedChange+=(_,e)=>prefs.Edit()!.PutBoolean("autoSavedRouters",e.IsChecked)!.Apply();
+            saved.AddView(automatic);
         }
         var pendingSetups = OfflineSetupStore.Find();
         if (pendingSetups.Count > 0)
@@ -401,12 +413,12 @@ public sealed partial class MainActivity : Activity
         var local = Card("Set up and manage locally", "Bluetooth for first-time setup; local Wi-Fi for settings and mesh information. No ARRIS account required.");
         Action(local, "Set up a router over Bluetooth", BleScanAndPick, Tone.Primary);
         address = Input(local, "Local router address", lastAddress);
-        address.TextChanged += (_, _) => addressEdited = true;
+        address.TextChanged += (_, _) => { addressEdited = true; interactionVersion++; };
         Action(local, "Find ARRIS routers on this Wi-Fi", ScanRouters);
         Action(local, "Use an existing local admin login", EnterLocalLogin);
-        Action(local, "Initial admin setup / recovery · WOBA", () => { ShowWobaStart(); return Task.CompletedTask; });
+        Action(local, "WOBA · connect and manage", () => { ShowWobaStart(); return Task.CompletedTask; });
         Action(local, "Bluetooth setup and node diagnostics", SetupDiagnostics);
-        local.AddView(Label("Router searches and connections start only when you tap a button. Bluetooth tools are available without joining the router's Wi-Fi.", 13, color: Palette.Muted));
+        local.AddView(Label("Full network scans start only when you tap Find. Saved routers can reconnect automatically using their verified keys. Bluetooth tools are available without joining the router's Wi-Fi.", 13, color: Palette.Muted));
         local.AddView(Label("Offline factory setup and complete node pairing still need physical-router validation. A fresh unit may expose only Bluetooth.", 12));
         var cloudOptions = Card("Optional account access", "Only use this if you choose to acquire a credential through ARRIS. Local setup above does not contact ARRIS.");
         var account = Column(); account.Visibility = ViewStates.Gone; cloudOptions.AddView(account);
@@ -446,19 +458,18 @@ public sealed partial class MainActivity : Activity
     {
             var form = Column(); form.SetPadding(Dp(20), Dp(4), Dp(20), Dp(4));
             var formScroll = new ScrollView(this); formScroll.AddView(form);
-            var serial = Input(form, "Router serial number"); var mac = Input(form, "Router certificate MAC address");
-            var user = Input(form, "Local management username / email"); var pass = Input(form, "Local management password (not Wi-Fi password)", secret: true);
+            form.AddView(Label("Router: "+address.Text+"\nIts identity is read automatically after login.",13));
+            var user = Input(form, "Local admin username", "admin"); var pass = Input(form, "Local admin password (not Wi-Fi password)", secret: true);
             var done = new TaskCompletionSource<bool>();
             var dialog = new AlertDialog.Builder(this)!.SetTitle("Existing local credential")!.SetView(formScroll)!
                 .SetPositiveButton("Verify", (_, _) => done.TrySetResult(true))!.SetNegativeButton("Cancel", (_, _) => done.TrySetResult(false))!.Create()!;
             dialog.CancelEvent += (_, _) => done.TrySetResult(false); dialog.Show();
             if (!await done.Task) return;
-            var id = serial.Text!.Trim().ToUpperInvariant(); var hardware = Regex.Replace(mac.Text!.ToUpperInvariant(), "[^A-F0-9]", "");
-            if (!Regex.IsMatch(id, "^[A-Z0-9]{12,24}$") || !Regex.IsMatch(hardware, "^[A-F0-9]{12}$")) throw new RouterException("Enter the complete router serial and 12-digit certificate MAC address.");
             if (string.IsNullOrEmpty(user.Text) || string.IsNullOrEmpty(pass.Text)) throw new RouterException("Enter the local management username and password.");
-            var credential = new RouterCredential(user.Text, pass.Text); pass.Text = "";
-            var device = new CloudDevice("ARRIS mAX", id, hardware); acquired = new(credential, [device]);
-            await Verify(device);
+            var credential = new RouterCredential(user.Text.Trim(), pass.Text); pass.Text = "";
+            var target=address.Text!.Trim(); AndroidNetwork.UseLocal(); status.Text="Verifying the local login and reading router identity…";
+            var record=await LocalAdminAccess.LoginAndSaveAsync(target,credential,lifetime.Token,scannedPins.GetValueOrDefault(target));
+            acquired=null; await Connect(record);
     }
     async Task ScanRouters()
     {
@@ -1036,7 +1047,7 @@ public sealed partial class MainActivity : Activity
 
     string? AddressOverride() => addressEdited && !string.IsNullOrWhiteSpace(address?.Text) ? address.Text!.Trim() : null;
 
-    async Task Connect(CredentialRecord record, string? addressOverride = null)
+    async Task Connect(CredentialRecord record, string? addressOverride = null,bool automatic=false)
     {
         if (!string.IsNullOrEmpty(addressOverride))
         {
@@ -1045,7 +1056,7 @@ public sealed partial class MainActivity : Activity
         }
         status.Text = "Connecting to " + record.Address + "…"; client?.Dispose(); client = new(record);
         client.Progress = message => RunOnUiThread(() => { if (!IsDestroyed) status.Text = message; });
-        await Task.Run(() => client.ConnectAsync(lifetime.Token), lifetime.Token); dirty = false;
+        await Task.Run(() => client.ConnectAsync(lifetime.Token,savedAddressOnly:automatic), lifetime.Token); dirty = false;
         GetSharedPreferences("connection", FileCreationMode.Private)!.Edit()!.PutString("address", client.Record.Address)!.PutString("serial", client.Record.Serial)!.Apply();
         currentPage = Catalog.Pages[0]; ShowRouter(); await Read();
     }

@@ -5,13 +5,25 @@ using System.Text.RegularExpressions;
 namespace ArrisControl;
 public sealed partial class MainActivity
 {
+    WobaSession? managementWoba;
+    RouterApiEndpoint? managementWobaEndpoint;
+    WobaSession ManagementWoba(RouterApiEndpoint endpoint)
+    {
+        if(managementWoba is null || managementWobaEndpoint!=endpoint)
+        {
+            managementWoba?.Dispose();
+            managementWoba=new WobaSession(endpoint){Progress=m=>status.Text=m};
+            managementWobaEndpoint=endpoint;
+        }
+        return managementWoba;
+    }
     void ShowWobaStart(string? selectedAddress=null)
     {
         ble?.Dispose();ble=null;
         var previous=selectedAddress??address?.Text?.Trim()??"192.168.7.1";
         client?.Dispose();client=null;acquired=null;
         Shell("WOBA local setup");backAction=BackToStart;
-        var intro=Card("Initial local admin access","Use WOBA to establish a local admin login while onboarding is incomplete and the local API is reachable. Once saved, use the normal admin login for ongoing settings, including after onboarding completes. This flow does not contact ARRIS.");
+        var intro=Card("WOBA access and settings","Keep WOBA active while using the full local settings interface. Inspect the router, then reuse a saved admin login or establish one through WOBA. Settings use that local login; no ARRIS account or onboarding completion is required.");
         var target=Input(intro,"Router IPv4 address",previous);
         var knownPins=new Dictionary<string,string>(scannedPins,StringComparer.Ordinal);
         Action(intro,"Find routers on this Wi-Fi",async()=>
@@ -27,7 +39,7 @@ public sealed partial class MainActivity
             var endpoint=await RouterDiscovery.ProbeApiAsync(target.Text?.Trim()??"",lifetime.Token)??throw new RouterException("The local ARRIS API did not answer with a valid device certificate. Check Wi-Fi and Bluetooth bring-up.");
             if(knownPins.TryGetValue(endpoint.Address,out var expectedPin) && endpoint.Pin!=expectedPin)throw new RouterException("The certificate key changed since discovery. No WOBA login was sent.");
             knownPins[endpoint.Address]=endpoint.Pin;
-            using var session=new WobaSession(endpoint){Progress=m=>status.Text=m};
+            var session=ManagementWoba(endpoint);
             var inspection=await session.InspectAsync(lifetime.Token);
             ShowWobaInspection(endpoint,inspection);
         },Tone.Primary);
@@ -40,6 +52,30 @@ public sealed partial class MainActivity
         var identity=Card("Selected router",inspection.Device.ToString(),chipText:inspection.Incomplete?"Onboarding incomplete":"State unverified");
         identity.AddView(Label("Local address: "+inspection.Address+"\nRole: "+inspection.Role+"\nFirmware: "+inspection.Firmware+"\nCertificate key: "+endpoint.Fingerprint,14));
         ShowWobaStatus(inspection);
+        var management=Card("Manage settings · keep WOBA active","All normal settings, including Wi-Fi, DFS, band steering and mesh tools, remain available while onboarding is incomplete. WOBA's own API exposes fewer settings; the app uses a remembered local admin login for the full interface.");
+        Action(management,"Manage settings — keep WOBA active",async()=>
+        {
+            var matches=LocalAdminAccess.MatchSaved(CredentialStore.Find(),[endpoint])
+                .Where(m=>m.Record.Serial==inspection.Device.Serial).ToList();
+            if(matches.Count==1){await Connect(matches[0].Record,endpoint.Address);return;}
+            var session=ManagementWoba(endpoint);
+            var credential=new RouterCredential("admin",GeneratePassword());
+            var plan=session.Prepare(inspection,credential);
+            if(!await Confirm("Enable full local settings?",plan.Preview+"\n\nThe app generates and remembers the new password. WOBA and onboarding stay active. No completion command is sent.","Set and remember admin login"))return;
+            string? pending=null;
+            try
+            {
+                await session.ApplyAsync(plan,draft=>pending=OfflineSetupStore.Save(draft),lifetime.Token);
+                var draft=OfflineSetupStore.Load(pending!);
+                ShowOfflineVerification(pending!,draft);
+                await VerifyOfflineDraft(pending!,draft,draft.Address,draft.Credential.CertificatePin);
+            }
+            catch(Exception ex) when(ex is RouterException or System.Net.Http.HttpRequestException or OperationCanceledException or IOException)
+            {
+                if(pending is not null && File.Exists(pending))ShowOfflineVerification(pending,OfflineSetupStore.Load(pending));
+                throw;
+            }
+        },Tone.Primary);
         var diagnostics=Card("Onboarding diagnostics","Identity, role, WAN, update progress and supported setup fields. Passwords, physical-access hashes and cloud configuration are excluded.");
         var fields=inspection.Data.SelectMany(kv=>Catalog.Flatten(kv.Value,kv.Key)).ToArray();
         var text=Label(string.Join("\n\n",fields.Select(f=>f.Field+"\n"+f.Value)),13);text.SetTextIsSelectable(true);diagnostics.AddView(text);
@@ -63,7 +99,7 @@ public sealed partial class MainActivity
             {
                 if(pass.Text!=again.Text)throw new RouterException("The new passwords do not match.");
                 var credential=new RouterCredential(user.Text?.Trim()??"",pass.Text??"");
-                using var session=new WobaSession(endpoint){Progress=m=>status.Text=m};
+                var session=ManagementWoba(endpoint);
                 var plan=session.Prepare(inspection,credential);
                 if(!await Confirm("Set this router's local admin credential?",plan.Preview,"Set admin credential once"))return;
                 string? pending=null;
@@ -90,7 +126,7 @@ public sealed partial class MainActivity
         AddWobaCompletion(endpoint,inspection);
         Action(content,"Refresh WOBA inspection",async()=>
         {
-            using var session=new WobaSession(endpoint){Progress=m=>status.Text=m};ShowWobaInspection(endpoint,await session.InspectAsync(lifetime.Token));
+            var session=ManagementWoba(endpoint);ShowWobaInspection(endpoint,await session.InspectAsync(lifetime.Token));
         });
         Action(content,"Back to connections",BackToStart);
     }

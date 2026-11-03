@@ -10,6 +10,25 @@ internal static class AndroidNetwork
     static Network? LocalNetwork => Manager.GetAllNetworks().FirstOrDefault(n =>
         Manager.GetNetworkCapabilities(n) is { } c && (c.HasTransport(TransportType.Wifi) || c.HasTransport(TransportType.Ethernet)));
     public static bool HasLocalNetwork => LocalNetwork is not null;
+    public static string ConnectionKey => LocalNetwork is { } network
+        ? network+"|"+string.Join(",",Manager.GetLinkProperties(network)?.LinkAddresses?.Select(a=>a.ToString())??[])
+        : "";
+    public static IEnumerable<string> Gateways() => LocalNetwork is { } network
+        ? (Manager.GetLinkProperties(network)?.Routes??[]).Select(r=>r.Gateway?.HostAddress??"").Where(CredentialStore.IsPrivate)
+        : [];
+    public static bool IsOnLocalSubnet(string address)
+    {
+        if(!CredentialStore.IsPrivate(address)||LocalNetwork is not { } network)return false;
+        var target=IPAddress.Parse(address).GetAddressBytes();
+        foreach(var a in Manager.GetLinkProperties(network)?.LinkAddresses??[])
+        {
+            if(!IPAddress.TryParse(a.Address?.HostAddress,out var local)||local.AddressFamily!=System.Net.Sockets.AddressFamily.InterNetwork||
+                local.Equals(IPAddress.Parse(address))||a.PrefixLength is <1 or >30)continue;
+            var bytes=local.GetAddressBytes();
+            if(Enumerable.Range(0,a.PrefixLength).All(i=>(bytes[i/8]&(128>>(i%8)))==(target[i/8]&(128>>(i%8)))))return true;
+        }
+        return false;
+    }
     public static void UseLocal()
     {
         var network = LocalNetwork;

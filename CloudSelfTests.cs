@@ -46,6 +46,7 @@ internal static class CloudSelfTests
     }
     public static async Task RunAsync()
     {
+        await LocalLoginAndMatching();
         var assembly=Assembly.GetExecutingAssembly();using var vectorStream=assembly.GetManifestResourceStream(assembly.GetManifestResourceNames().Single(n=>n.EndsWith("srp-test-vector.json",StringComparison.Ordinal)))!;
         var vector=JsonNode.Parse(vectorStream)!;string V(string key)=>Catalog.Text(vector[key]);var srp=new CognitoSrp(V("Pool"),V("PrivateA"));
         Assert(srp.PublicA==V("PublicA") && srp.Sign(V("User"),V("Password"),V("ServerB"),V("Salt"),V("SecretBlock"),V("Timestamp"))==V("Signature"),"Embedded SRP regression vector failed.");
@@ -80,6 +81,57 @@ internal static class CloudSelfTests
             TestPersistence(acquired,directory);
         }
         finally{foreach(var file in Directory.EnumerateFiles(directory))File.Delete(file);Directory.Delete(directory,false);}
+    }
+    sealed class LocalLoginFixture : IRouterWire
+    {
+        public readonly List<string> Calls=[];
+        public string Serial="TESTSERIAL123",Mode="BRIDGE";
+        public bool RejectLogin;
+        public Task<JsonObject> SendAsync(string path,string? body=null,CancellationToken token=default)
+        {
+            token.ThrowIfCancellationRequested();Calls.Add(path);
+            if(path=="/loginAction")
+            {
+                if(RejectLogin)throw new RouterException("Incorrect login","IncorrectCredentials");
+                return Task.FromResult(new JsonObject{["STATUS"]="OK"});
+            }
+            if(body is not null)throw new InvalidOperationException("Local login attempted a configuration write.");
+            return Task.FromResult(path switch{
+                "/getData?key=DEVICE_INFO_ALL"=>new JsonObject{["DEVICE_INFO"]=new JsonObject{["SERIAL_KEY"]=Serial,["MODEL_NAME"]="W30"}},
+                "/getData?key=DEVICEOPERMODE_ALL"=>new JsonObject{["DEVICEOPERMODE"]=new JsonObject{["MODE"]=Mode}},
+                _=>throw new InvalidOperationException("Unexpected local login query.")});
+        }
+        public void Dispose(){}
+    }
+    static async Task LocalLoginAndMatching()
+    {
+        var pinA=Convert.ToBase64String(SHA256.HashData("fictional router A"u8.ToArray()));
+        var pinB=Convert.ToBase64String(SHA256.HashData("fictional router B"u8.ToArray()));
+        var endpoint=new RouterApiEndpoint("192.168.1.1","001122334455","SessionTimeout",pinA);
+        var credential=new RouterCredential("admin","FictionalLocalPassword123!");
+        using var fixture=new LocalLoginFixture();
+        var identity=await LocalAdminAccess.VerifyAsync(fixture,endpoint,credential,default);
+        Assert(identity==new CloudDevice("W30","TESTSERIAL123","001122334455"),"Local login did not learn identity without user-entered serial/MAC.");
+        Assert(fixture.Calls.SequenceEqual(new[]{"/loginAction","/getData?key=DEVICE_INFO_ALL","/getData?key=DEVICEOPERMODE_ALL"}),"Local login performed unexpected operations.");
+        foreach(var bad in new[]{new LocalLoginFixture{Serial=""},new LocalLoginFixture{Mode="OB"},new LocalLoginFixture{RejectLogin=true}})
+        {
+            bool refused=false;try{await LocalAdminAccess.VerifyAsync(bad,endpoint,credential,default);}catch(RouterException){refused=true;}
+            Assert(refused,"Invalid local login/identity/mode was accepted.");
+            if(bad.RejectLogin)Assert(bad.Calls.Count==1,"Rejected login continued to protected reads.");
+        }
+        using var invalid=new LocalLoginFixture();
+        bool invalidRefused=false;try{await LocalAdminAccess.VerifyAsync(invalid,endpoint with{Pin="invalid"},credential,default);}catch(RouterException){invalidRefused=true;}
+        Assert(invalidRefused&&invalid.Calls.Count==0,"Credentials were sent before endpoint validation.");
+        var a=new CredentialRecord("a","TESTSERIAL123","001122334455","192.168.1.1");
+        var b=new CredentialRecord("b","TESTSERIAL456","001122334455","192.168.1.1");
+        RouterCredential Load(CredentialRecord r)=>credential with{CertificatePin=r.Path=="a"?pinA:pinB};
+        var matches=LocalAdminAccess.MatchSaved([a,b],[endpoint],Load);
+        Assert(matches.Count==1 && matches[0].Record==a,"Router A selected another network's credentials.");
+        matches=LocalAdminAccess.MatchSaved([a,b],[endpoint with{Pin=pinB}],Load);
+        Assert(matches.Count==1 && matches[0].Record==b,"Router B selected another network's credentials.");
+        Assert(LocalAdminAccess.MatchSaved([a,b],[endpoint with{Pin=Convert.ToBase64String(new byte[32])}],Load).Count==0,"An unknown key selected saved credentials.");
+        Assert(LocalAdminAccess.MatchSaved([a],[endpoint],_=>credential).Count==0,"An unpinned legacy login was automatically selected.");
+        Console.WriteLine("PASS: local admin identity discovery without serial/MAC input; protected-mode/login rejection; separate saved credentials on networks with identical addresses and copied MACs.");
     }
     static void TestPersistence(AcquiredCredential acquired,string directory)
     {
