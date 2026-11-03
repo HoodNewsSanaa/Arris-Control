@@ -1,11 +1,11 @@
-Android 0.4.6 fixes backhaul-rate matching and adds names for mesh nodes and saved networks.
+Android 0.4.7 puts naming where you use it.
 
-The mesh parser now recognizes the stock HNC fields WANMACAddr, MACAddr and IPAddr. It matches a router's reported device MAC alongside its WAN MAC, so existing satellites can show their reported link rates without depending on the AUTO_WOBA discovery list. Tests reproduce the reported 2.88 Gbps down / 2.59 Gbps up association and exclude unrelated clients or ambiguous matches. These are PHY link rates, not measured throughput.
+On **Overview**, choose **Name this network**, or hold the displayed network name. Saving updates the Overview label and selected-router heading immediately. This is the same saved connection name shown under Your routers.
 
-Select a node in the mesh diagram or list, then choose **Name selected node**. Names update the diagram, list and connection descriptions immediately and remain saved on this phone across reconnects and address changes. **Use reported name** removes that local override.
+On **Mesh**, long-press an individual router in the diagram or its node-list button to name that node directly. A short tap still selects it for inspection. Dragging, scrolling cancellation and a second touch cancel the hold. The explicit Name selected node button remains available.
 
-Under **Your routers**, choose **Name this router / network** to label connections such as Home or Parents. The name appears on the connection button and selected-router header. Saved-network names are separate from physical mesh-node names and follow router identity across IP changes and refreshed credential files. Naming does not change Wi-Fi settings or login credentials.
+Names use the existing private, identity-based storage and are retained when updating from 0.4.6. Naming does not change Wi-Fi settings or credentials and does not trigger a management read or network scan. The previous backhaul-rate, DFS and band-steering fixes remain included.
 
-DFS and band-steering controls now recognize true/false as well as 0/1 responses. Their writes use the firmware's expected true/false strings; the DFS handler converts true to its native radio value 2. Read-back checks compare equivalent boolean forms while rejecting missing or unchanged states. Unknown values remain unavailable, and unchanged toggles do not send a write.
+This update uses the existing package and permanent signing key. Release checks cover shared regressions, Android compilation and launch, HTTPS/Keystore management and encrypted-login retention after an in-place update. Physical-phone validation of the new touch gestures is still needed.
 
-The existing local login, saved-router matching and WOBA management flows remain available. This update uses the existing package and permanent signing key to preserve saved logins when installed over the previous release. Release checks include shared regressions, Android compilation, HTTPS/Keystore checks and update credential retention.
+Normal local management and labels are not W30-specific, but W31 hardware has not been validated. WOBA credential setup and onboarding-completion writes remain restricted to the verified W30 firmware.

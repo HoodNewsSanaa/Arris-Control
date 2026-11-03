@@ -13,12 +13,19 @@ without depending on its presence in the AUTO_WOBA discovery table. Client MACs
 are never promoted to router aliases, and a single satellite is not matched to an
 unrelated association just because it is the only node.
 
-Select a router in the diagram or node list, then use **Name selected node** to
-give it a local label. Labels are saved in Android's private app preferences,
+Long-press an individual router in the diagram or its node-list button to name
+that router directly. A short tap still selects it for inspection; dragging or
+scrolling cancels the hold. **Name selected node** remains available as a button.
+Labels are saved in Android's private app preferences,
 keyed by stable serial/MAC identities rather than IP address or diagram position.
 They apply to node buttons, the diagram, accessibility descriptions and link
 details. **Use reported name** clears the local override for that node. Naming
 does not send a router write, change Wi-Fi names, or change credentials.
+
+Network labels are edited separately from **Overview → Name this network** or
+by holding that Overview label. This reuses the saved connection name shown
+under Your routers and updates the selected-router heading immediately. Naming
+does not trigger a router read or a discovery scan.
 
 Vendor PHP maps DOWNLINKRATE and UPLINKRATE to Device.WiFi.AccessPoint.18.
 AssociatedDevice.{i}.LastDataDownlinkRate / LastDataUplinkRate. The standard defines

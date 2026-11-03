@@ -37,7 +37,9 @@ or Internet connection is needed by these local actions:
    The app does not equate Wi-Fi credentials with admin credentials.
 
 Under **Your routers**, use **Name this router / network** to label a saved
-connection, such as Home or Parents' house. The name appears on its connection
+connection, such as Home or Parents' house. The same saved connection can be
+renamed from **Overview → Name this network**, or by holding its name there.
+The name appears on its connection
 button and the selected-router header. It is saved privately on this phone and
 follows the router's identity across IP changes and refreshed credential files.
 **Clear name** restores the serial-based label. These connection names are

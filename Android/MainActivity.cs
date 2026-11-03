@@ -18,7 +18,7 @@ public sealed partial class MainActivity : Activity
 {
     LinearLayout root = null!, content = null!;
     TextView status = null!, networkStatus = null!;
-    TextView? routerSessionStatus;
+    TextView? routerSessionStatus, selectedRouterHeading;
     ProgressBar activityProgress = null!;
     EditText address = null!, email = null!, password = null!;
     CloudConfiguration? configuration;
@@ -214,7 +214,7 @@ public sealed partial class MainActivity : Activity
     }
     void Shell(string subtitle)
     {
-        buttons.Clear(); backAction = null; routerSessionStatus = null;
+        buttons.Clear(); backAction = null; routerSessionStatus = null; selectedRouterHeading = null;
         root = Column(); root.SetBackgroundColor(Palette.Bg); root.FocusableInTouchMode = true; root.RequestFocus();
         root.SetPadding(Dp(20), Dp(20), Dp(20), Dp(10));
         var brandRow = new LinearLayout(this) { Orientation = Orientation.Horizontal }; brandRow.SetGravity(GravityFlags.CenterVertical);
@@ -267,6 +267,15 @@ public sealed partial class MainActivity : Activity
         if (Build.VERSION.SdkInt >= BuildVersionCodes.O) field.ImportantForAutofill = ImportantForAutofill.NoExcludeDescendants;
         var layout = new LinearLayout.LayoutParams(-1, -2) { BottomMargin = Dp(14) };
         parent.AddView(field, layout); return field;
+    }
+    void BindLongPress(View view,Func<Task> action)
+    {
+        view.LongClickable=true;
+        view.LongClick+=async(_,args)=>
+        {
+            args.Handled=true;
+            if(!busy)await Run(action);
+        };
     }
     async Task<int> Choose(string title, string[] items)
     {
@@ -1083,7 +1092,10 @@ public sealed partial class MainActivity : Activity
             if (currentPage != Catalog.Pages[0]) { currentPage = Catalog.Pages[0]; ShowRouter(); await Read(); }
             else { client?.Dispose(); client = null; AndroidNetwork.UseInternet(); ShowConnect(); }
         };
-        var navigation = Card("Selected router · "+SavedRouterName(client!.Record), client.Record.Address + " · " + client.Record.Serial);
+        var navigation = Card();
+        selectedRouterHeading=Label("Selected router · "+SavedRouterName(client!.Record),20,true);
+        navigation.AddView(selectedRouterHeading);
+        navigation.AddView(Label(client.Record.Address+" · "+client.Record.Serial,14,color:Palette.Muted));
         routerSessionStatus = Label("", 13, color: Palette.Muted);
         navigation.AddView(routerSessionStatus);
         UpdateRouterSessionStatus();

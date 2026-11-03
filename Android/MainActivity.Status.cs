@@ -25,6 +25,16 @@ public sealed partial class MainActivity
     void ShowNormalRouterStatus(Snapshot snapshot)
     {
         var current = client!;
+        var network=Card("Network","A local label for this saved connection. This does not change the Wi-Fi network name.");
+        var networkName=Label(SavedRouterName(current.Record),20,true);
+        network.AddView(networkName);
+        Task RenameNetwork()=>NameSavedRouter(current.Record,()=>
+        {
+            networkName.Text=SavedRouterName(current.Record);
+            if(selectedRouterHeading is not null)selectedRouterHeading.Text="Selected router · "+SavedRouterName(current.Record);
+        });
+        Action(network,"Name this network",RenameNetwork);
+        BindLongPress(networkName,RenameNetwork);
         var card = Card("Router status", "Checked " + snapshot.Time.ToString("HH:mm:ss") + ". Local access, routing mode and setup state are separate.");
         StatusRow(card, "App → router", new(current.IsConnected ? "Connected locally" : "Connection lost",
             current.Record.Address, current.IsConnected ? RouterStatusLevel.Normal : RouterStatusLevel.Attention));
