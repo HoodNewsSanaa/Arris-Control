@@ -2,6 +2,32 @@ namespace ArrisControl;
 
 public sealed partial class MainActivity
 {
+    string SavedRouterName(CredentialRecord record)=>SavedRouterLabels.Name(record,key=>
+        GetSharedPreferences("saved-router-names",Android.Content.FileCreationMode.Private)!.GetString(key,null));
+    string SavedRouterCaption(CredentialRecord record)
+    {
+        var name=SavedRouterName(record);
+        return "Connect · "+name+"\n"+record.Address+(name==record.Serial?"":" · "+record.Serial);
+    }
+    async Task NameSavedRouter(CredentialRecord record,Action onSaved)
+    {
+        var prefs=GetSharedPreferences("saved-router-names",Android.Content.FileCreationMode.Private)!;
+        var form=Column();form.SetPadding(Dp(20),Dp(4),Dp(20),Dp(4));
+        var field=Input(form,"Router / network name · up to 48 characters",prefs.GetString(SavedRouterLabels.Key(record),"")??"");
+        form.AddView(Label("For example: Home or Parents' house. Saved on this phone; Wi-Fi settings and saved logins are unchanged.",13));
+        var done=new TaskCompletionSource<int>();
+        var dialog=new Android.App.AlertDialog.Builder(this)!.SetTitle("Name saved router / network")!.SetView(form)!
+            .SetPositiveButton("Save",(_,_)=>done.TrySetResult(1))!
+            .SetNeutralButton("Clear name",(_,_)=>done.TrySetResult(0))!
+            .SetNegativeButton("Cancel",(_,_)=>done.TrySetResult(-1))!.Create()!;
+        dialog.CancelEvent+=(_,_)=>done.TrySetResult(-1);dialog.Show();
+        var action=await done.Task;if(action<0)return;
+        var value=action==0?"":MeshNodeLabels.Validate(field.Text??"");
+        var editor=prefs.Edit()!;
+        if(value.Length==0)editor.Remove(SavedRouterLabels.Key(record));else editor.PutString(SavedRouterLabels.Key(record),value);
+        if(!editor.Commit())throw new RouterException("The router name could not be saved on this phone. Try again.");
+        onSaved();status.Text=value.Length==0?"Saved router name cleared.":"Saved router / network name updated.";
+    }
     CancellationTokenSource? savedRouterMatching;
     string matchedNetwork="";
 

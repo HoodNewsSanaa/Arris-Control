@@ -20,6 +20,41 @@ internal static class MeshTopologySelfTests
         Check(mesh.Links.Count==1 && mesh.Links[0].Down=="2.4 Gbps" && mesh.Links[0].Up=="2.16 Gbps" && mesh.Links[0].Signal=="-56 dBm","MAC-correlated rates or inactive-link handling failed.");
         Check(mesh.Describe(mesh.Routers[2]).Contains("not reported"),"An unknown upstream link was invented.");
         Check(MeshTopology.Rate("0")=="Not reported" && MeshTopology.Rate("bad")=="Not reported" && MeshTopology.Rate("100000")=="100 Mbps","Rate units/unknown handling failed.");
+        // Officially provisioned satellites can be absent from AUTO_WOBA discovery.
+        // Reproduce native HNC's WAN/device MAC aliases and the user's actual rate values.
+        var native=Fixture(false);native.Data.Remove("AUTO_WOBA_SAT_STATUS_ALL");
+        native.Data["NETWORKMAP_ALL"]=Obj("""{"HNC":{"data":{"type":"device","deviceType":"gateway","serialNum":"TESTSERIAL123","WANMACAddr":"00:11:22:33:44:55"},"children":[{"data":{"type":"interface","ifType":"WIFI-BACKHAUL"},"children":[{"text":"Existing satellite","data":{"type":"device","deviceType":"extender","serialNum":"SATELLITE001","WANMACAddr":"00:11:22:33:44:66","MACAddr":"00:11:22:33:44:67","IPAddr":"192.168.7.2","OBComplete":"true"},"children":[{"data":{"type":"device","deviceType":"unknown","MACAddr":"AA:BB:CC:DD:EE:FF","IPAddr":"192.168.7.20"}}]}]}]}}""");
+        native.Data["LINKSPEEDBH_ALL"]=Obj("""{"LINKSPEEDBH":[{"ACTIVE":1,"STAADDRESS":"00:11:22:33:44:67","MACADDRESS":"00:11:22:33:44:67","DOWNLINKRATE":2882350,"UPLINKRATE":2594110,"SIGNALSTRENGTH":-54,"TXRATE":8,"RXRATE":9}]}""");
+        var nativeMesh=MeshTopology.Parse(native,record);
+        Check(nativeMesh.Routers.Count==2 && nativeMesh.Routers[1].Mac=="001122334466" && nativeMesh.Routers[1].Address=="192.168.7.2","Native HNC identity/IP aliases or client exclusion failed.");
+        Check(nativeMesh.Links.Count==1 && nativeMesh.Links[0].Down=="2.88 Gbps" && nativeMesh.Links[0].Up=="2.59 Gbps" && nativeMesh.Links[0].Signal=="-54 dBm","Native HNC MAC aliases failed to correlate the reported active rates.");
+        var savedNames=new Dictionary<string,string>();
+        var otherNetwork=record with{Serial="OTHERSERIAL123",Mac="AABBCCDDEEFF"};
+        var networkLabels=new Dictionary<string,string>{[SavedRouterLabels.Key(record)]="Home",[SavedRouterLabels.Key(otherNetwork)]="Parents"};
+        var changedAddress=record with{Path="new-credential-version",Address="192.168.50.1",Created=DateTimeOffset.UtcNow};
+        Check(SavedRouterLabels.Name(changedAddress,key=>networkLabels.GetValueOrDefault(key))=="Home" &&
+            SavedRouterLabels.Name(otherNetwork,key=>networkLabels.GetValueOrDefault(key))=="Parents","Saved-network names followed IP/profile path or mixed routers sharing an IP.");
+        networkLabels.Remove(SavedRouterLabels.Key(record));
+        Check(SavedRouterLabels.Name(record,key=>networkLabels.GetValueOrDefault(key))==record.Serial &&
+            SavedRouterLabels.Name(otherNetwork,key=>networkLabels.GetValueOrDefault(key))=="Parents","Clearing one saved-network label affected another router.");
+        foreach(var key in MeshNodeLabels.Keys(nativeMesh.Routers[0]))savedNames[key]=MeshNodeLabels.Validate(" Living room ");
+        foreach(var key in MeshNodeLabels.Keys(nativeMesh.Routers[1]))savedNames[key]=MeshNodeLabels.Validate("Upstairs 🛜");
+        var named=MeshNodeLabels.Apply(nativeMesh,key=>savedNames.GetValueOrDefault(key));
+        Check(named.Routers[0].Name=="Living room" && named.Routers[1].Name=="Upstairs 🛜" && named.Links.SequenceEqual(nativeMesh.Links),"Custom node names changed identities/rates or were not applied separately.");
+        var moved=nativeMesh with{Routers=nativeMesh.Routers.Reverse().Select(n=>n with{Address="192.168.50.2",Name="Reported new name"}).ToArray()};
+        Check(MeshNodeLabels.Apply(moved,key=>savedNames.GetValueOrDefault(key)).Routers.First(n=>n.Id=="SATELLITE001").Name=="Upstairs 🛜","A node name was tied to IP address, node position or the reported name.");
+        foreach(var key in MeshNodeLabels.Keys(nativeMesh.Routers[1]))savedNames.Remove(key);
+        var reset=MeshNodeLabels.Apply(nativeMesh,key=>savedNames.GetValueOrDefault(key));
+        Check(reset.Routers[1].Name=="Existing satellite" && reset.Routers[0].Name=="Living room","Resetting one custom name changed another node or failed to restore its reported name.");
+        foreach(var invalidName in new[]{new string('x',49),"Room\nUpstairs"})
+        {
+            var refused=false;try{MeshNodeLabels.Validate(invalidName);}catch(RouterException){refused=true;}
+            Check(refused,"An overlong/multiline node label was accepted.");
+        }
+        var unrelated=native.Data["LINKSPEEDBH_ALL"]["LINKSPEEDBH"]![0]!;
+        unrelated["STAADDRESS"]="AA:BB:CC:DD:EE:FF";unrelated["MACADDRESS"]="AA:BB:CC:DD:EE:FF";
+        var unmatched=MeshTopology.Parse(native,record);
+        Check(unmatched.Links.All(l=>l.Down=="Not reported"),"An unrelated client rate was assigned to the only satellite by elimination.");
         var anonymous=Fixture(false);anonymous.Data.Remove("LINKSPEEDBH_ALL");
         Check(MeshTopology.Parse(anonymous,record).Links.Count==0,"Satellite table was mistaken for an active topology.");
         var ambiguous=Fixture(false);var list=ambiguous.Data["AUTO_WOBA_SAT_STATUS_ALL"]["AUTO_WOBA_SAT_STATUS"]!["SAT_LIST"]!.AsArray();

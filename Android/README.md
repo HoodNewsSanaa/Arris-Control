@@ -36,6 +36,13 @@ or Internet connection is needed by these local actions:
    is preferred; otherwise choose one under Connections.
    The app does not equate Wi-Fi credentials with admin credentials.
 
+Under **Your routers**, use **Name this router / network** to label a saved
+connection, such as Home or Parents' house. The name appears on its connection
+button and the selected-router header. It is saved privately on this phone and
+follows the router's identity across IP changes and refreshed credential files.
+**Clear name** restores the serial-based label. These connection names are
+separate from the physical node names in the mesh diagram.
+
 Bluetooth bring-up is separate from Wi-Fi management. Fresh routers may expose
 only Bluetooth. **Offline factory setup is experimental and still needs spare-unit
 validation**: the app makes no ARRIS requests, but firmware independence from ARRIS

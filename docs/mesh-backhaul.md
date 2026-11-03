@@ -6,6 +6,20 @@ nodes are not router nodes. The satellite table supplies identities without
 assuming topology. An active, uniquely MAC-correlated local AP backhaul association
 supplies a direct local-AP/satellite link. Inactive or ambiguous rows are excluded.
 
+Native HNC fields `WANMACAddr`, `MACAddr` and `IPAddr` are recognized alongside
+the older aliases. A router retains both its reported WAN and device MAC identities
+for unique association matching. This lets an existing satellite display rates
+without depending on its presence in the AUTO_WOBA discovery table. Client MACs
+are never promoted to router aliases, and a single satellite is not matched to an
+unrelated association just because it is the only node.
+
+Select a router in the diagram or node list, then use **Name selected node** to
+give it a local label. Labels are saved in Android's private app preferences,
+keyed by stable serial/MAC identities rather than IP address or diagram position.
+They apply to node buttons, the diagram, accessibility descriptions and link
+details. **Use reported name** clears the local override for that node. Naming
+does not send a router write, change Wi-Fi names, or change credentials.
+
 Vendor PHP maps DOWNLINKRATE and UPLINKRATE to Device.WiFi.AccessPoint.18.
 AssociatedDevice.{i}.LastDataDownlinkRate / LastDataUplinkRate. The standard defines
 these in kbit/s, in AP-to-STA and STA-to-AP directions respectively:

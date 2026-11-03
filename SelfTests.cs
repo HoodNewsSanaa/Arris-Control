@@ -21,6 +21,13 @@ internal static class SelfTests
             {
                 Writes++;if(LoseWriteReply)throw new HttpRequestException("simulated connection loss");
                 Settings.ValidateEnvelope(body!);var request=JsonNode.Parse(body!)!["REQUEST"]!;
+                if(request["WIFI_FH_DFS"] is JsonObject dfs)
+                {
+                    var flag=Catalog.Text(dfs["ENABLE"]);
+                    Assert(flag is "true" or "false","DFS did not use the firmware's true/false write format.");
+                    State["WIFI_FH_DFS_ALL"]=new JsonObject{["WIFI_FH_DFS"]=new JsonObject{["ENABLE"]=flag=="true"}};
+                    return Task.FromResult(new JsonObject{["STATUS"]="OK"});
+                }
                 if(request["DEVICEOPERMODE"] is JsonObject mode){State["DEVICEOPERMODE_ALL"]["DEVICEOPERMODE"]=mode.DeepClone();return Task.FromResult(new JsonObject{["STATUS"]="OK"});}
                 var payload=request["NETWORKDNS"]!.AsObject();var dns=State["NETWORKDNS_ALL"]["NETWORKDNS"]!.AsObject();
                 foreach(var name in new[]{"DYNAMICV4","DYNAMICV6"})dns[name]=payload[name]!.DeepClone();
@@ -55,7 +62,19 @@ internal static class SelfTests
         SettingDefinition Def(string container)=>Settings.Definitions.Single(d=>d.Container==container);
         // New toggles produce a minimal MODIFY envelope for their own container.
         var dfs=Settings.Prepare(Def("WIFI_FH_DFS"),"WIFI_FH_DFS",new JsonObject{["ENABLE"]="1"},new(){["ENABLE"]="0"});
-        Assert(dfs.Body=="{\"REQUEST\":{\"OPERTYPE\":\"MODIFY\",\"WIFI_FH_DFS\":{\"ENABLE\":\"0\"}}}","DFS toggle envelope changed.");
+        Assert(dfs.Body=="{\"REQUEST\":{\"OPERTYPE\":\"MODIFY\",\"WIFI_FH_DFS\":{\"ENABLE\":\"false\"}}}","DFS toggle did not use the native false string.");
+        foreach(var container in new[]{"WIFI_FH_DFS","WIFI_FH_BANDSTEERING"})
+        {
+            var enabled=Settings.Prepare(Def(container),container,new JsonObject{["ENABLE"]=false},new(){["ENABLE"]="1"});
+            Assert(Catalog.Text(JsonNode.Parse(enabled.Body)!["REQUEST"]![container]!["ENABLE"])=="true","Boolean radio toggle did not send true.");
+            Assert(Settings.VerifyValues(new JsonObject{["ENABLE"]=true},enabled.Expected) && Settings.VerifyValues(new JsonObject{["ENABLE"]=1},enabled.Expected),"Boolean radio toggle read-back rejected an equivalent true value.");
+            Assert(!Settings.VerifyValues(new JsonObject{["ENABLE"]=false},enabled.Expected) && !Settings.VerifyValues(new JsonObject(),enabled.Expected),"Radio toggle verification accepted unchanged/missing state.");
+            Refuses(()=>Settings.Prepare(Def(container),container,new JsonObject{["ENABLE"]="false"},new(){["ENABLE"]="0"}),"An unchanged false toggle produced a write.");
+        }
+        Assert(Settings.SameValues(new JsonObject{["ENABLE"]="0"},new JsonObject{["ENABLE"]=false}) &&
+            !Settings.SameValues(new JsonObject{["ENABLE"]=true},new JsonObject{["ENABLE"]=false}),"Boolean normalization hid a real stale-setting change.");
+        foreach(var raw in new[]{"true","false","1","0"})Assert(Settings.TryToggle(raw,out _),"A valid toggle was hidden as unavailable.");
+        foreach(var raw in new[]{"","unknown","NA","2"})Assert(!Settings.TryToggle(raw,out _),"An unknown toggle became editable.");
         Refuses(()=>Settings.Prepare(Def("LEDRING"),"LEDRING",new JsonObject{["ENABLE"]="1",["BRIGHTNESS"]="50"},new(){["BRIGHTNESS"]="101"}),"Out-of-range brightness accepted.");
         Assert(Settings.Prepare(Def("LEDRING"),"LEDRING",new JsonObject{["ENABLE"]="1",["BRIGHTNESS"]="50"},new(){["BRIGHTNESS"]="0"}).Body.Contains("\"BRIGHTNESS\":\"0\""),"Brightness 0 rejected.");
         // Static WAN: valid mask accepted, missing gateway and bad masks refused.
@@ -152,6 +171,16 @@ internal static class SelfTests
         Refuses(()=>Settings.Prepare(definition,"NETWORKDNS",baseline,new(){["DNSIPV4SERVERS"]="bad.address"}),"Invalid DNS accepted.");
         Refuses(()=>Settings.Prepare(definition,"NETWORKDNS",baseline,new(){["DYNAMICV4"]="2"}),"Invalid DNS mode accepted.");
         var profile=new CredentialRecord("unused","TESTSERIAL123","001122334455","192.168.7.1");
+        var dfsWire=new FakeWire();
+        dfsWire.State["WIFI_FH_DFS_ALL"]=new JsonObject{["WIFI_FH_DFS"]=new JsonObject{["ENABLE"]=false}};
+        using(var dfsClient=new RouterClient(profile,dfsWire))
+        {
+            var dfsDef=Settings.Definitions.Single(d=>d.Container=="WIFI_FH_DFS");
+            var dfsSection=new SettingSection(dfsDef,dfsDef.Container,0,"",new JsonObject{["ENABLE"]=false},"DFS channels");
+            var planned=await dfsClient.PrepareAsync(dfsSection,new(){["ENABLE"]="1"});
+            var saved=await dfsClient.ApplyAsync(planned);
+            Assert(dfsWire.Writes==1 && saved.StartsWith("Saved and verified",StringComparison.Ordinal),"DFS boolean baseline/write/read-back did not complete one verified write.");
+        }
         using(var client=new RouterClient(profile,wire))
         {
             var result=await client.ApplyAsync(change);Assert(wire.Writes==1 && result.StartsWith("Saved and verified",StringComparison.Ordinal),"Save/read-back failed.");

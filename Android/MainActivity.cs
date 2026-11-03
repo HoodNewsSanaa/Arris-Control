@@ -403,7 +403,11 @@ public sealed partial class MainActivity : Activity
         {
             var saved = Card("Your routers", "Use the saved normal admin login. It does not require onboarding mode or router Bluetooth. Tap a router to connect or find its current address.",
                 chipText: records.Count == 1 ? "Saved" : records.Count + " saved", chipColor: Palette.Success);
-            foreach (var record in records) Action(saved, "Connect\n" + record.Serial, () => Connect(record, AddressOverride()), Tone.Primary);
+            foreach (var record in records)
+            {
+                var connect=Action(saved,SavedRouterCaption(record),()=>Connect(record,AddressOverride()),Tone.Primary);
+                Action(saved,"Name this router / network",()=>NameSavedRouter(record,()=>connect.Text=SavedRouterCaption(record)));
+            }
             var automatic=new CheckBox(this){Text="Automatically connect to saved routers on this Wi-Fi",Checked=prefs.GetBoolean("autoSavedRouters",true)};
             automatic.SetTextColor(Palette.Text);
             automatic.CheckedChange+=(_,e)=>prefs.Edit()!.PutBoolean("autoSavedRouters",e.IsChecked)!.Apply();
@@ -1063,7 +1067,7 @@ public sealed partial class MainActivity : Activity
             if (!CredentialStore.IsPrivate(addressOverride)) throw new RouterException("Enter a private IPv4 address or use Scan for ARRIS routers.");
             record = record with { Address = addressOverride };
         }
-        status.Text = "Connecting to " + record.Address + "…"; client?.Dispose(); client = new(record);
+        status.Text = "Connecting to " + SavedRouterName(record) + " ("+record.Address+")…"; client?.Dispose(); client = new(record);
         client.Progress = message => RunOnUiThread(() => { if (!IsDestroyed) status.Text = message; });
         await Task.Run(() => client.ConnectAsync(lifetime.Token,savedAddressOnly:automatic), lifetime.Token); dirty = false;
         GetSharedPreferences("connection", FileCreationMode.Private)!.Edit()!.PutString("address", client.Record.Address)!.PutString("serial", client.Record.Serial)!.Apply();
@@ -1079,7 +1083,7 @@ public sealed partial class MainActivity : Activity
             if (currentPage != Catalog.Pages[0]) { currentPage = Catalog.Pages[0]; ShowRouter(); await Read(); }
             else { client?.Dispose(); client = null; AndroidNetwork.UseInternet(); ShowConnect(); }
         };
-        var navigation = Card("Selected router", client!.Record.Address + " · " + client.Record.Serial);
+        var navigation = Card("Selected router · "+SavedRouterName(client!.Record), client.Record.Address + " · " + client.Record.Serial);
         routerSessionStatus = Label("", 13, color: Palette.Muted);
         navigation.AddView(routerSessionStatus);
         UpdateRouterSessionStatus();
@@ -1262,7 +1266,7 @@ public sealed partial class MainActivity : Activity
             var old = Catalog.Text(section.Baseline[field.Key]);
             if (field.Kind == "toggle")
             {
-                var toggle = new Switch(this) { Text = field.Label, Checked = old == "1", TextSize = 15 };
+                var toggle = new Switch(this) { Text = field.Label, Checked = Settings.TryToggle(old,out var enabled) && enabled, TextSize = 15 };
                 toggle.SetPadding(0, Dp(10), 0, Dp(10)); toggle.CheckedChange += (_, _) => dirty = true;
                 toggle.SetMinHeight(Dp(60)); toggle.SetTextColor(Palette.Text); editor.AddView(toggle); getters[field.Key] = () => toggle.Checked ? "1" : "0";
             }

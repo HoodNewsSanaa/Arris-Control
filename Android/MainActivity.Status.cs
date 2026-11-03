@@ -100,7 +100,7 @@ public sealed partial class MainActivity
             var definition = Settings.Definitions.Single(d => d.Container == container);
             var section = sections.FirstOrDefault(s => s.Container == container);
             var value = section is null ? "" : Catalog.Text(section.Baseline["ENABLE"]);
-            if (section is not null && value is ("0" or "1")) Editor(section);
+            if (section is not null && Settings.TryToggle(value,out _)) Editor(section);
             else
             {
                 var read = snapshot.Reads.FirstOrDefault(r => r.Key == definition.Key);

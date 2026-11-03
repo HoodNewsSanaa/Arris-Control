@@ -255,7 +255,8 @@ internal sealed class MainWindow : Window
             Control editor;Func<string> getter;
             if(field.Kind=="toggle")
             {
-                var check=new CheckBox{Content="Enabled",IsThreeState=old is not ("0" or "1"),IsChecked=old=="1"?true:old=="0"?false:null,VerticalAlignment=VerticalAlignment.Center};check.Checked+=MarkDirty;check.Unchecked+=MarkDirty;check.Indeterminate+=MarkDirty;editor=check;getter=()=>check.IsChecked==true?"1":check.IsChecked==false?"0":old;
+                var known=Settings.TryToggle(old,out var enabled);
+                var check=new CheckBox{Content="Enabled",IsThreeState=!known,IsChecked=known?enabled:null,VerticalAlignment=VerticalAlignment.Center};check.Checked+=MarkDirty;check.Unchecked+=MarkDirty;check.Indeterminate+=MarkDirty;editor=check;getter=()=>check.IsChecked==true?"1":check.IsChecked==false?"0":old;
             }
             else if(field.Kind is "choice" or "channel")
             {

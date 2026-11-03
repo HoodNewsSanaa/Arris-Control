@@ -16,6 +16,16 @@ internal record PendingChange(SettingDefinition Definition,string Container,int 
 
 internal static class Settings
 {
+    public static bool TryToggle(string value,out bool enabled)
+    {
+        switch(value.Trim().ToLowerInvariant())
+        {
+            case "1":case "true":enabled=true;return true;
+            case "0":case "false":enabled=false;return true;
+            default:enabled=false;return false;
+        }
+    }
+    static bool ToggleKey(string key)=>Definitions.Any(d=>d.Fields.Any(f=>f.Key==key && f.Kind=="toggle"));
     static SettingField Toggle(string key,string label)=>new(key,label,"toggle");
     static SettingField Text(string key,string label,string kind="text",string hint="")=>new(key,label,kind,null,hint);
     public static readonly SettingDefinition[] Definitions=[
@@ -145,11 +155,16 @@ internal static class Settings
         return null;
     }
     public static bool SameValues(JsonObject? current,JsonObject baseline)=>current is not null && baseline.All(kv=>
-        JsonNode.DeepEquals(current[kv.Key]??(kv.Key=="DISPLAY" ? current["LED_DISPLAY"]:null),kv.Value));
+    {
+        var actual=current[kv.Key]??(kv.Key=="DISPLAY"?current["LED_DISPLAY"]:null);
+        if(ToggleKey(kv.Key) && TryToggle(Catalog.Text(actual),out var a) && TryToggle(Catalog.Text(kv.Value),out var b))return a==b;
+        return JsonNode.DeepEquals(actual,kv.Value);
+    });
     public static bool VerifyValues(JsonObject? actual,JsonObject expected)=>actual is not null && expected.All(kv=>
     {
         var value=Catalog.Text(actual[kv.Key]??(kv.Key=="DISPLAY" ? actual["LED_DISPLAY"]:null));
         if(Catalog.Secret.IsMatch(kv.Key) && (value.Length==0 || Regex.IsMatch(value,"^[*•]+$")))return false;
+        if(ToggleKey(kv.Key) && TryToggle(value,out var a) && TryToggle(Catalog.Text(kv.Value),out var b))return a==b;
         return value.Trim().Equals(Catalog.Text(kv.Value).Trim(),kv.Key=="MACADDRESS" ? StringComparison.OrdinalIgnoreCase:StringComparison.Ordinal);
     });
     public static JsonObject? FindMatch(JsonObject response,string container,JsonObject expected)
@@ -207,9 +222,12 @@ internal static class Settings
                 value=string.Join(',',value.Split(',').Select(v=>v.Trim()).Where(v=>v.Length>0));
                 oldValue=string.Join(',',oldValue.Split(',').Select(v=>v.Trim()).Where(v=>v.Length>0));
             }
-            if(value==oldValue && operation!="ADD")continue;
+            if(operation!="ADD" && (value==oldValue || field.Kind=="toggle" && TryToggle(value,out var requested) && TryToggle(oldValue,out var previous) && requested==previous))continue;
             if(field.Kind is not ("dns4" or "dns6"))Validate(field,value);
-            payload[field.Key]=value;expected[field.Key]=value;
+            // Stock mAX DFS converts the exact strings true/false into radio values 2/0.
+            var wireValue=field.Kind=="toggle" && container is ("WIFI_FH_DFS" or "WIFI_FH_BANDSTEERING")
+                ? value=="1"?"true":"false":value;
+            payload[field.Key]=wireValue;expected[field.Key]=wireValue;
             var old=Catalog.Secret.IsMatch(field.Key) ? "[hidden]":Catalog.Text(before[field.Key]);
             changes.Add(field.Label+": "+(operation=="ADD"?"":old+" → ")+(Catalog.Secret.IsMatch(field.Key)?"[new password]":value));
         }

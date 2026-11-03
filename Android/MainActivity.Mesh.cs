@@ -1,3 +1,4 @@
+using Android.App;
 using Android.Content;
 using Android.Graphics;
 using Android.Views;
@@ -21,16 +22,53 @@ public sealed partial class MainActivity
     SatelliteSetupState? satelliteSetup;
     void ShowMesh(Snapshot snapshot,CredentialRecord? previewRecord=null)
     {
-        var topology=MeshTopology.Parse(snapshot,previewRecord??client!.Record);
+        var reported=MeshTopology.Parse(snapshot,previewRecord??client!.Record);
+        var names=GetSharedPreferences("mesh-node-names",FileCreationMode.Private)!;
+        var topology=previewRecord is null?MeshNodeLabels.Apply(reported,key=>names.GetString(key,null)):reported;
         var card=Card("Mesh backhaul",$"{topology.Routers.Count} routers · {topology.Links.Count} reported connections · {topology.Time:HH:mm:ss}");
-        var selected=Label(topology.Describe(topology.Routers[0]),14);
-        var diagram=new MeshMapView(this,topology,node=>selected.Text=node.Name+"\n"+topology.Describe(node));
+        var selectedId=topology.Routers[0].Id;
+        var selected=Label(topology.Routers[0].Name+"\n"+topology.Describe(topology.Routers[0]),14);
+        var diagram=new MeshMapView(this,topology,node=>{selectedId=node.Id;selected.Text=node.Name+"\n"+topology.Describe(node);});
         card.AddView(diagram,new LinearLayout.LayoutParams(-1,Dp(380)));
         card.AddView(selected);
         card.AddView(Label("↓ Local AP → satellite   ↑ Satellite → local AP\nPHY link rates, not measured throughput. A dotted triangle guide means no connection was reported. This snapshot does not refresh automatically.",12));
+        var nodeButtons=new Dictionary<string,Button>();
         foreach(var node in topology.Routers)
-            Action(card,node.Name+(node.Controller?" · Main":" · Satellite"),()=>{diagram.Select(node);selected.Text=node.Name+"\n"+topology.Describe(node);return Task.CompletedTask;});
-        if(previewRecord is null)Action(content,"Add a mesh node",()=>{ShowAddNode(snapshot);return Task.CompletedTask;},Tone.Primary);
+            nodeButtons[node.Id]=Action(card,node.Name+(node.Controller?" · Main":" · Satellite"),()=>
+            {
+                var current=topology.Routers.First(n=>n.Id==node.Id);selectedId=current.Id;
+                diagram.Select(current);selected.Text=current.Name+"\n"+topology.Describe(current);return Task.CompletedTask;
+            });
+        if(previewRecord is null)
+        {
+            Action(card,"Name selected node",async()=>
+            {
+                var node=topology.Routers.First(n=>n.Id==selectedId);
+                var keys=MeshNodeLabels.Keys(node);
+                if(keys.Length==0)throw new RouterException("This node has no stable identity for saving a name. Refresh its identity first.");
+                var form=Column();form.SetPadding(Dp(20),Dp(4),Dp(20),Dp(4));
+                var field=Input(form,"Name in this app · up to 48 characters",node.Name);
+                form.AddView(Label("Saved on this phone for this router. Wi-Fi names and router settings are unchanged.",13));
+                var done=new TaskCompletionSource<int>();
+                var dialog=new AlertDialog.Builder(this)!.SetTitle("Name mesh node")!.SetView(form)!
+                    .SetPositiveButton("Save",(_,_)=>done.TrySetResult(1))!
+                    .SetNeutralButton("Use reported name",(_,_)=>done.TrySetResult(0))!
+                    .SetNegativeButton("Cancel",(_,_)=>done.TrySetResult(-1))!.Create()!;
+                dialog.CancelEvent+=(_,_)=>done.TrySetResult(-1);dialog.Show();
+                var action=await done.Task;if(action<0)return;
+                var value=action==0?"":MeshNodeLabels.Validate(field.Text??"");
+                var editor=names.Edit()!;
+                foreach(var key in keys)if(value.Length==0)editor.Remove(key);else editor.PutString(key,value);
+                if(!editor.Commit())throw new RouterException("The node name could not be saved on this phone. Try again.");
+                topology=MeshNodeLabels.Apply(reported,key=>names.GetString(key,null));
+                foreach(var current in topology.Routers)nodeButtons[current.Id].Text=current.Name+(current.Controller?" · Main":" · Satellite");
+                diagram.SetTopology(topology);
+                var renamed=topology.Routers.First(n=>n.Id==selectedId);
+                selected.Text=renamed.Name+"\n"+topology.Describe(renamed);
+                status.Text=value.Length==0?"Using the router's reported name.":"Node name saved on this phone.";
+            });
+            Action(content,"Add a mesh node",()=>{ShowAddNode(snapshot);return Task.CompletedTask;},Tone.Primary);
+        }
     }
     void ShowAddNode(Snapshot snapshot)
     {
@@ -129,7 +167,7 @@ public sealed partial class MainActivity
     }
     sealed class MeshMapView : View
     {
-        readonly MainActivity owner;readonly MeshTopology mesh;readonly Action<MeshRouter> changed;
+        readonly MainActivity owner;MeshTopology mesh;readonly Action<MeshRouter> changed;
         readonly Paint paint=new(PaintFlags.AntiAlias);readonly List<(MeshRouter Node,float X,float Y)> points=[];
         string selected;float radius;
         public MeshMapView(MainActivity owner,MeshTopology mesh,Action<MeshRouter> changed):base(owner)
@@ -138,6 +176,12 @@ public sealed partial class MainActivity
             ContentDescription="Mesh topology. "+string.Join(". ",mesh.Routers.Select(n=>n.Name+": "+mesh.Describe(n)));
         }
         public void Select(MeshRouter node){selected=node.Id;Invalidate();}
+        public void SetTopology(MeshTopology topology)
+        {
+            mesh=topology;
+            ContentDescription="Mesh topology. "+string.Join(". ",mesh.Routers.Select(n=>n.Name+": "+mesh.Describe(n)));
+            Invalidate();
+        }
         protected override void OnDraw(Canvas canvas)
         {
             base.OnDraw(canvas);points.Clear();var visible=mesh.Routers.Take(8).ToArray();radius=owner.Dp(28);
