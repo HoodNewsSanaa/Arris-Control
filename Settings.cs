@@ -25,6 +25,14 @@ internal static class Settings
             default:enabled=false;return false;
         }
     }
+    /// <summary>Primary/secondary DNS for two-field editors. Automatic-mode placeholders (0.0.0.0, ::) show as empty.</summary>
+    public static (string Primary,string Secondary) SplitDns(string value)
+    {
+        var parts=value.Split(',').Select(p=>p.Trim()).Where(p=>p.Length>0 && p is not ("0.0.0.0" or "::")).ToArray();
+        return (parts.ElementAtOrDefault(0)??"",parts.ElementAtOrDefault(1)??"");
+    }
+    public static string JoinDns(string? primary,string? secondary)=>
+        string.Join(',',new[]{primary?.Trim()??"",secondary?.Trim()??""}.Where(p=>p.Length>0));
     static bool ToggleKey(string key)=>Definitions.Any(d=>d.Fields.Any(f=>f.Key==key && f.Kind=="toggle"));
     static SettingField Toggle(string key,string label)=>new(key,label,"toggle");
     static SettingField Text(string key,string label,string kind="text",string hint="")=>new(key,label,kind,null,hint);
@@ -65,9 +73,13 @@ internal static class Settings
         new("WIFI_FH_DFS_ALL","WIFI_FH_DFS","DFS channels",[Toggle("ENABLE","Allow DFS (radar-shared) 5 GHz channels")],false,
             "DFS channels can be less crowded, but the router must leave them briefly when radar is detected. This changes the main router only; satellites keep their own DFS setting."),
         new("WIFI_FAST_LANE_ALL","WIFI_FAST_LANE","Wi-Fi fast lane",[Toggle("ENABLE","Prioritize Wi-Fi traffic for fast-lane devices")]),
-        new("LEDRING_ALL","LEDRING","Light ring",[Toggle("ENABLE","Light ring on"),Text("BRIGHTNESS","Brightness (0–100)","percent")],false,"",["CONTAINER"]),
-        new("TIME_ALL","TIMEZONE","Time zone",[Toggle("AUTOENABLE","Set time zone automatically"),Text("LOCALTIMEZONE","Time zone","timezone"),
-            Toggle("DSTENABLE","Daylight saving time")],false,"",["ENABLE"]),
+        new("LEDRING_ALL","LEDRING","Light ring",[Toggle("ENABLE","Light ring on"),Text("BRIGHTNESS","Brightness (1–100)","percent","The router ignores 0. To turn the light off, set the status light to Off.")],false,"",["CONTAINER"]),
+        // TIME_ALL returns TIME{LOCALTIMEZONE (UTC offset), DSTENABLE, AUTOENABLE}; the mobile API knows only these zones
+        // (Common.php getTimeZone). AUTO_TIME_ZONE_SUPPORT is false on mAX, so AUTOENABLE is passed back unchanged.
+        new("TIME_ALL","TIME","Time zone",[new("LOCALTIMEZONE","Time zone","choice",[new("-11:00","UTC−11 · Midway Island, Samoa"),new("-10:00","UTC−10 · Hawaii"),
+            new("-09:00","UTC−9 · Alaska"),new("-08:00","UTC−8 · Pacific Time"),new("-07:00","UTC−7 · Mountain Time"),new("-06:00","UTC−6 · Central Time"),
+            new("-05:00","UTC−5 · Eastern Time"),new("-04:00","UTC−4 · Atlantic Time"),new("+00:00","UTC+0 · London"),new("+05:30","UTC+5:30 · India")]),
+            Toggle("DSTENABLE","Daylight saving time")],false,"",["AUTOENABLE"]),
         new("WANSTATICIPV4_ALL","WANSTATICIPV4","Internet (WAN) IPv4",[
             new("DYNAMICV4","Address mode","choice",[new("1","Automatic (DHCP)"),new("0","Static")]),
             Text("WANIPV4ADDRESS","Static IPv4 address","ipv4"),Text("SUBNETMASK","Subnet mask","netmask"),
@@ -109,7 +121,13 @@ internal static class Settings
     static SettingDefinition Wifi(string container,string title,bool guest)=>new(container+"_ALL",container,title,
         guest ? [Toggle("ENABLE","Guest Wi-Fi enabled"),Text("SSIDNAME","Network name","ssid"),Text("PASSPHRASE","New Wi-Fi password","password","Leave blank to keep the current password.")]
         : [Text("SSIDNAME","Network name","ssid"),Text("PASSPHRASE","New Wi-Fi password","password","Leave blank to keep the current password."),
-            Toggle("AUTOCHANNEL","Choose channel automatically"),Text("CHANNEL","Radio channel","channel"),Toggle("SSIDADVERTISEMENTENABLED","Broadcast network name")],
+            Toggle("AUTOCHANNEL","Choose channel automatically"),Text("CHANNEL","Radio channel","channel"),Toggle("SSIDADVERTISEMENTENABLED","Broadcast network name"),
+            // W30 ConverterJson toBw/toPower values; sent only when changed (see Prepare).
+            new("BANDWIDTH","Channel width","choice",container.Contains("24G",StringComparison.Ordinal)
+                ? [new("20 MHz","20 MHz"),new("20/40 MHz","Up to 40 MHz")]
+                : [new("20 MHz","20 MHz"),new("20/40 MHz","Up to 40 MHz"),new("20/40/80 MHz","Up to 80 MHz"),new("20/40/80/160 MHz","Up to 160 MHz")],
+                container.Contains("24G",StringComparison.Ordinal)?"":"160 MHz on 5 GHz needs DFS channels."),
+            new("POWER","Transmit power","choice",[new("High","High"),new("Medium","Medium (75%)"),new("Low","Low (50%)"),new("Very Low","Very low (25%)")])],
         false,"Changing Wi-Fi may disconnect this PC and other wireless devices.",["IDX","SECURITYMODE","SECURITYMETHOD","SECURITYENC"]);
 
     public static JsonObject Filter(SettingDefinition def,JsonObject source)
@@ -181,7 +199,7 @@ internal static class Settings
         if(field.Kind=="password" && !(value.Length is >=8 and <=63 || Regex.IsMatch(value,"^[A-Fa-f0-9]{64}$")))throw new RouterException("Use an 8–63 character Wi-Fi password or a 64-digit hexadecimal key.");
         if(field.Kind is "ipv4" or "ipv6")CheckIp(value,field.Kind=="ipv4"?AddressFamily.InterNetwork:AddressFamily.InterNetworkV6,field.Label);
         if(field.Kind=="mac" && !Regex.IsMatch(value,"^(?:[A-Fa-f0-9]{2}:){5}[A-Fa-f0-9]{2}$"))throw new RouterException("Use a MAC address such as 00:11:22:33:44:55.");
-        if(field.Kind=="percent" && !(int.TryParse(value,out var percent) && percent is >=0 and <=100))throw new RouterException(field.Label+" must be between 0 and 100.");
+        if(field.Kind=="percent" && !(int.TryParse(value,out var percent) && percent is >=1 and <=100))throw new RouterException(field.Label+" must be between 1 and 100. To turn the light off, set the status light to Off.");
         if(field.Kind=="netmask" && !IsNetmask(value))throw new RouterException("Enter a subnet mask such as 255.255.255.0.");
         if(field.Kind=="host" && !Regex.IsMatch(value,@"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$"))throw new RouterException("Enter a website name such as example.com (without http://).");
         if(field.Kind=="timezone" && !Regex.IsMatch(value,@"^[A-Za-z0-9_+\-/:., ]{1,64}$"))throw new RouterException("Enter a time zone such as America/New_York.");
@@ -231,6 +249,8 @@ internal static class Settings
             var old=Catalog.Secret.IsMatch(field.Key) ? "[hidden]":Catalog.Text(before[field.Key]);
             changes.Add(field.Label+": "+(operation=="ADD"?"":old+" → ")+(Catalog.Secret.IsMatch(field.Key)?"[new password]":value));
         }
+        // Radio width/power are only sent when changed, so a name or password save can't touch them.
+        if(container.StartsWith("WIFI_",StringComparison.Ordinal))foreach(var key in new[]{"BANDWIDTH","POWER"})if(!expected.ContainsKey(key))payload.Remove(key);
         // Never resend a masked password as if it were the actual Wi-Fi key.
         foreach(var secret in payload.Where(kv=>Catalog.Secret.IsMatch(kv.Key)).Select(kv=>kv.Key).ToArray())
             if(Regex.IsMatch(Catalog.Text(payload[secret]),"^[*•]+$"))payload.Remove(secret);

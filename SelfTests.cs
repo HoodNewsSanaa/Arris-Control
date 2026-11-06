@@ -76,7 +76,20 @@ internal static class SelfTests
         foreach(var raw in new[]{"true","false","1","0"})Assert(Settings.TryToggle(raw,out _),"A valid toggle was hidden as unavailable.");
         foreach(var raw in new[]{"","unknown","NA","2"})Assert(!Settings.TryToggle(raw,out _),"An unknown toggle became editable.");
         Refuses(()=>Settings.Prepare(Def("LEDRING"),"LEDRING",new JsonObject{["ENABLE"]="1",["BRIGHTNESS"]="50"},new(){["BRIGHTNESS"]="101"}),"Out-of-range brightness accepted.");
-        Assert(Settings.Prepare(Def("LEDRING"),"LEDRING",new JsonObject{["ENABLE"]="1",["BRIGHTNESS"]="50"},new(){["BRIGHTNESS"]="0"}).Body.Contains("\"BRIGHTNESS\":\"0\""),"Brightness 0 rejected.");
+        // W30 normalizeToLedRingQuery drops BRIGHTNESS "0", so it could never verify; Off is the status light's job.
+        Refuses(()=>Settings.Prepare(Def("LEDRING"),"LEDRING",new JsonObject{["ENABLE"]="1",["BRIGHTNESS"]="50"},new(){["BRIGHTNESS"]="0"}),"Brightness 0 accepted although the firmware ignores it.");
+        Assert(Settings.Prepare(Def("LEDRING"),"LEDRING",new JsonObject{["ENABLE"]="1",["BRIGHTNESS"]="50"},new(){["BRIGHTNESS"]="1"}).Body.Contains("\"BRIGHTNESS\":\"1\""),"Brightness 1 rejected.");
+        // Wi-Fi channel width/power: offered with firmware values, sent only when changed.
+        var radio=new JsonObject{["IDX"]="9",["SSIDNAME"]="home",["AUTOCHANNEL"]="1",["CHANNEL"]="100",["SSIDADVERTISEMENTENABLED"]="1",["BANDWIDTH"]="20/40/80/160 MHz",["POWER"]="High"};
+        var rename=Settings.Prepare(Def("WIFI_5G"),"WIFI_5G",radio,new(){["SSIDNAME"]="home2"});
+        Assert(!rename.Body.Contains("BANDWIDTH") && !rename.Body.Contains("POWER"),"An unchanged channel width or power was sent with a rename.");
+        var width=Settings.Prepare(Def("WIFI_5G"),"WIFI_5G",radio,new(){["BANDWIDTH"]="20/40/80 MHz"});
+        Assert(width.Body.Contains("\"BANDWIDTH\":\"20/40/80 MHz\"") && !width.Body.Contains("POWER") && width.Expected.Count==1,"Channel width change was not sent alone.");
+        Refuses(()=>Settings.Prepare(Def("WIFI_24G"),"WIFI_24G",radio,new(){["BANDWIDTH"]="20/40/80/160 MHz"}),"160 MHz was accepted on 2.4 GHz.");
+        // Time zone: TIME container, firmware UTC-offset choices, AUTOENABLE passed through unchanged.
+        var time=Settings.Prepare(Def("TIME"),"TIME",new JsonObject{["LOCALTIMEZONE"]="-05:00",["DSTENABLE"]="1",["AUTOENABLE"]="0"},new(){["LOCALTIMEZONE"]="-08:00"});
+        Assert(time.Body=="{\"REQUEST\":{\"OPERTYPE\":\"MODIFY\",\"TIME\":{\"LOCALTIMEZONE\":\"-08:00\",\"DSTENABLE\":\"1\",\"AUTOENABLE\":\"0\"}}}","Time zone write differs from the firmware TIME setter.");
+        Refuses(()=>Settings.Prepare(Def("TIME"),"TIME",new JsonObject{["LOCALTIMEZONE"]="-05:00",["DSTENABLE"]="1"},new(){["LOCALTIMEZONE"]="America/New_York"}),"A time-zone name the firmware doesn't know was accepted.");
         // Static WAN: valid mask accepted, missing gateway and bad masks refused.
         var wan=new JsonObject{["DYNAMICV4"]="1",["WANIPV4ADDRESS"]="",["SUBNETMASK"]="",["GATEWAYIPV4"]="",["DNSIPV4SERVERS"]=""};
         var edits=new Dictionary<string,string>{["DYNAMICV4"]="0",["WANIPV4ADDRESS"]="203.0.113.10",["SUBNETMASK"]="255.255.255.0",["GATEWAYIPV4"]="203.0.113.1",["DNSIPV4SERVERS"]="9.9.9.9"};
@@ -170,6 +183,11 @@ internal static class SelfTests
         var bodyNode=JsonNode.Parse(change.Body)!["REQUEST"]!["NETWORKDNS"]!;
         Assert(Catalog.Text(bodyNode["IPV4ADDRESS"])=="9.9.9.9,1.1.1.1" && bodyNode["DNSIPV4SERVERS"] is null && Catalog.Text(bodyNode["IPV6ADDRESS"])=="::,::","DNS read/write field mapping differs from APK.");
         Refuses(()=>Settings.Prepare(definition,"NETWORKDNS",baseline,new(){["DNSIPV4SERVERS"]="bad.address"}),"Invalid DNS accepted.");
+        // Two-field DNS editors: placeholders show empty, joining keeps the firmware's "primary,secondary" form.
+        Assert(Settings.SplitDns("8.8.8.8, 1.1.1.1")==("8.8.8.8","1.1.1.1") && Settings.SplitDns("0.0.0.0,0.0.0.0")==("","") &&
+            Settings.SplitDns("::,::")==("","") && Settings.SplitDns("9.9.9.9")==("9.9.9.9",""),"DNS split changed.");
+        Assert(Settings.JoinDns(" 9.9.9.9 ","")=="9.9.9.9" && Settings.JoinDns("","1.1.1.1")=="1.1.1.1" && Settings.JoinDns("9.9.9.9","1.1.1.1")=="9.9.9.9,1.1.1.1" && Settings.JoinDns(null,null)=="","DNS join changed.");
+        Assert(Settings.Prepare(definition,"NETWORKDNS",baseline,new(){["DNSIPV4SERVERS"]=Settings.JoinDns("9.9.9.9","1.1.1.1")}).Body.Contains("\"IPV4ADDRESS\":\"9.9.9.9,1.1.1.1\""),"Joined DNS fields did not reach the firmware field.");
         Refuses(()=>Settings.Prepare(definition,"NETWORKDNS",baseline,new(){["DYNAMICV4"]="2"}),"Invalid DNS mode accepted.");
         var profile=new CredentialRecord("unused","TESTSERIAL123","001122334455","192.168.7.1");
         var dfsWire=new FakeWire();

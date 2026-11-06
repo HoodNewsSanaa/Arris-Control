@@ -1272,6 +1272,7 @@ public sealed partial class MainActivity : Activity
     {
         var editor = Card(section.Title);
         var getters = new Dictionary<string, Func<string>>();
+        var modeWatchers = new List<Action>();
         foreach (var field in section.Definition.Fields)
         {
             if (!adding && !section.Baseline.ContainsKey(field.Key) && field.Kind != "password") continue;
@@ -1292,8 +1293,25 @@ public sealed partial class MainActivity : Activity
                     var index = await Choose(field.Label, choices.Select(c => c.Label).ToArray());
                     if (index < 0) return;
                     selected = choices[index].Value; choice!.Text = Caption(); dirty = true;
+                    foreach (var watcher in modeWatchers) watcher();
                 });
                 getters[field.Key] = () => selected;
+            }
+            else if (field.Kind is "dns4" or "dns6")
+            {
+                // Two address fields instead of one comma-separated value; the wire format stays "primary,secondary".
+                var (first, second) = Settings.SplitDns(old);
+                var box = Column(); editor.AddView(box);
+                box.AddView(Label(field.Label, 14));
+                var primary = Input(box, "Primary DNS server", first);
+                var secondary = Input(box, "Secondary DNS server (optional)", second);
+                primary.TextChanged += (_, _) => dirty = true; secondary.TextChanged += (_, _) => dirty = true;
+                // Manual DNS (DYNAMICV4/6 = 0) or static WAN (DYNAMICV4 = 0); hidden and unchanged otherwise.
+                var modeKey = field.Key == "DNSIPV6SERVERS" ? "DYNAMICV6" : "DYNAMICV4";
+                bool Manual() => !getters.TryGetValue(modeKey, out var mode) || mode() == "0";
+                void Update() => box.Visibility = Manual() ? ViewStates.Visible : ViewStates.Gone;
+                modeWatchers.Add(Update); Update();
+                getters[field.Key] = () => Manual() ? Settings.JoinDns(primary.Text, secondary.Text) : old;
             }
             else
             {
