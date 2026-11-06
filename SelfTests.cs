@@ -150,6 +150,7 @@ internal static class SelfTests
         await MeshTopologySelfTests.RunAsync();
         await WobaSelfTests.RunAsync();
         await OnboardingCompletionSelfTests.RunAsync();
+        await SatelliteSelfTests.RunAsync();
         FeatureTests();
         Assert(CredentialStore.IsPrivate("192.168.7.1")&&!CredentialStore.IsPrivate("8.8.8.8")&&!CredentialStore.IsPrivate("127.0.0.1"),"Local address boundary failed.");
         var login=RouterClient.LoginBody("a+b@example.com","P@ss word!é","abcxyz123_windows_test",123456);

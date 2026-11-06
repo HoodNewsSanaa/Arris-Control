@@ -110,7 +110,12 @@ public sealed partial class MainActivity
             var definition = Settings.Definitions.Single(d => d.Container == container);
             var section = sections.FirstOrDefault(s => s.Container == container);
             var value = section is null ? "" : Catalog.Text(section.Baseline["ENABLE"]);
-            if (section is not null && Settings.TryToggle(value,out _)) Editor(section);
+            if (section is not null && Settings.TryToggle(value,out _))
+            {
+                Editor(section);
+                if (container == "WIFI_FH_DFS")
+                    content.AddView(Label("Applies to the main router only. Satellites keep their own DFS setting; open one from Mesh and devices to change it there (experimental).", 13, color: Palette.Muted));
+            }
             else
             {
                 var read = snapshot.Reads.FirstOrDefault(r => r.Key == definition.Key);

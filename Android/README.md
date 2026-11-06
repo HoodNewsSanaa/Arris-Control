@@ -76,6 +76,22 @@ repeating setup. Completed onboarding returns **LoginNotApplicable**; the app
 does not reset the router. W31 inspections are allowed but its credential-write
 path is not yet enabled. [WOBA scope and new capabilities](../docs/woba-local-admin.md).
 
+### Satellite pages
+
+On **Mesh and devices**, select a satellite and choose **Open selected satellite**.
+The page is read through the main router, which forwards a fixed set of requests
+to the satellite by its LAN address. It shows model and firmware, edits the light
+ring and status light, and offers a normal **Restart satellite**. Factory and
+Wi-Fi resets are refused. DNS, DHCP, Wi-Fi names, bypass and other network-wide
+settings are main-router settings and aren't shown. Each change re-checks the
+main router's and the satellite's serials, previews, sends once and reads back.
+
+DFS on the main router doesn't reach satellites; the firmware never forwards it,
+and the official app has the same limit. The satellite page's experimental
+**DFS channels** card talks to the satellite's internal mesh agent instead. It
+hasn't been tested on hardware and may be refused. See
+[satellite pages and satellite DFS](../docs/satellites.md).
+
 ### Triangle mesh view and adding nodes
 
 **Mesh and devices** draws up to eight known routers, with a triangle arrangement

@@ -63,7 +63,7 @@ internal static class Settings
         new("WIFI_FH_BANDSTEERING_ALL","WIFI_FH_BANDSTEERING","Band steering",[Toggle("ENABLE","One network name for 2.4 and 5 GHz")],false,
             "Wireless devices may briefly disconnect and rejoin."),
         new("WIFI_FH_DFS_ALL","WIFI_FH_DFS","DFS channels",[Toggle("ENABLE","Allow DFS (radar-shared) 5 GHz channels")],false,
-            "DFS channels can be less crowded, but the router must leave them briefly when radar is detected."),
+            "DFS channels can be less crowded, but the router must leave them briefly when radar is detected. This changes the main router only; satellites keep their own DFS setting."),
         new("WIFI_FAST_LANE_ALL","WIFI_FAST_LANE","Wi-Fi fast lane",[Toggle("ENABLE","Prioritize Wi-Fi traffic for fast-lane devices")]),
         new("LEDRING_ALL","LEDRING","Light ring",[Toggle("ENABLE","Light ring on"),Text("BRIGHTNESS","Brightness (0–100)","percent")],false,"",["CONTAINER"]),
         new("TIME_ALL","TIMEZONE","Time zone",[Toggle("AUTOENABLE","Set time zone automatically"),Text("LOCALTIMEZONE","Time zone","timezone"),
@@ -296,6 +296,8 @@ internal static class Settings
     public static void ValidateEnvelope(string body)
     {
         var root=JsonNode.Parse(body) as JsonObject;
+        // Main-node forwarding to a satellite has its own, narrower allowlist.
+        if(root?.Count==1 && root["REQUEST"] is JsonObject forwarded && forwarded.ContainsKey("HNEIPADDRESS")){SatelliteForwarding.ValidateEnvelope(forwarded);return;}
         if(root?.Count!=1 || root["REQUEST"] is not JsonObject request || request.Count!=2)throw new RouterException("Unsupported settings payload.");
         var operation=Catalog.Text(request["OPERTYPE"]);var entry=request.FirstOrDefault(kv=>kv.Key!="OPERTYPE");
         if(entry.Key=="TURNOFFBLE")

@@ -1268,7 +1268,7 @@ public sealed partial class MainActivity : Activity
         ShowRouter(); await Read();
     }
 
-    void Editor(SettingSection section, bool adding = false)
+    void Editor(SettingSection section, bool adding = false, Func<Dictionary<string, Func<string>>, Task>? save = null)
     {
         var editor = Card(section.Title);
         var getters = new Dictionary<string, Func<string>>();
@@ -1302,7 +1302,7 @@ public sealed partial class MainActivity : Activity
                 if (field.Hint.Length > 0) editor.AddView(Label(field.Hint, 12));
             }
         }
-        Action(editor, adding ? "Review new rule" : "Review changes", () => Save(section, getters, adding ? "ADD" : "MODIFY"), Tone.Primary);
+        Action(editor, adding ? "Review new rule" : "Review changes", () => save is not null ? save(getters) : Save(section, getters, adding ? "ADD" : "MODIFY"), Tone.Primary);
         if (section.Definition.Collection && !adding) Action(editor, "Remove rule", () => Save(section, [], "DELETE"), Tone.Danger);
     }
     async Task Save(SettingSection section, Dictionary<string, Func<string>> getters, string operation = "MODIFY")

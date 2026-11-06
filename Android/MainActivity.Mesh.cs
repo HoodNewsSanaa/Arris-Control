@@ -81,6 +81,13 @@ public sealed partial class MainActivity
         }
         if(previewRecord is null)
         {
+            Action(card,"Open selected satellite",async()=>
+            {
+                var node=topology.Routers.First(n=>n.Id==selectedId);
+                if(node.Controller){status.Text="This is the main router; its settings are in the other sections. Select a satellite to open it.";return;}
+                var target=SatelliteTarget.From(node)??throw new RouterException("The main router didn't report this satellite's serial and LAN address. Refresh Mesh and devices and try again.");
+                await ShowSatellite(target);
+            },Tone.Primary);
             Action(card,"Name selected node",()=>RenameNode(selectedId));
             Action(content,"Add a mesh node",()=>{ShowAddNode(snapshot);return Task.CompletedTask;},Tone.Primary);
         }

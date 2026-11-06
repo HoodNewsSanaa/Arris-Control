@@ -8,6 +8,7 @@
     <Compile Include="../Core.cs;../Woba.cs;../WobaSelfTests.cs;../MeshTopology.cs;../MeshTopologySelfTests.cs;../FirmwareLookupCapture.cs;../FirmwareLookupCaptureSelfTests.cs;../WebUiExperiment.cs;../WebUiExperimentSelfTests.cs;../OfflineSetup.cs;../OfflineSetupSelfTests.cs;../Settings.cs;../RouterDiscovery.cs;../CloudAcquisition.cs;../CloudProtocol.cs;../CognitoCrypto.cs;../AcquisitionStore.cs;../SelfTests.cs;../CloudSelfTests.cs;../DiscoverySelfTests.cs" Link="Shared/%(Filename)%(Extension)" />
     <Compile Include="../RouterStatus.cs" Link="Shared/RouterStatus.cs" />
     <Compile Include="../SatelliteJoin.cs" Link="Shared/SatelliteJoin.cs" />
+    <Compile Include="../Satellite.cs;../SatelliteSelfTests.cs" Link="Shared/%(Filename)%(Extension)" />
     <Compile Include="../OnboardingCompletion.cs;../OnboardingCompletionSelfTests.cs" Link="Shared/%(Filename)%(Extension)" />
     <EmbeddedResource Include="../srp-test-vector.json" />
     <Compile Include="../Android/Updates/UpdateProtocol.cs;../Android/Updates/UpdateProtocolSelfTests.cs" Link="AndroidUpdates/%(Filename)%(Extension)" />

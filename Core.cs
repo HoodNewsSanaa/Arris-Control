@@ -267,9 +267,7 @@ internal sealed class LocalWire : IRouterWire
     }
     public async Task<JsonObject> SendAsync(string path,string? body=null,CancellationToken token=default)
     {
-        var allowed=body is null ? path.StartsWith("/getData?key=",StringComparison.Ordinal) && Catalog.ReadKeys.Contains(path[13..]) : path is "/loginAction" or "/setData";
-        if(woba)allowed=WobaProtocol.Allows(path,body);
-        if(!allowed) throw new RouterException("Request is outside the fixed local management API.");
+        if(!Allows(path,body,woba)) throw new RouterException("Request is outside the fixed local management API.");
         if(path=="/setData") Settings.ValidateEnvelope(body!);
         if(path==WobaProtocol.Set)WobaProtocol.ValidateBody(body!);
         using var request=new HttpRequestMessage(body is null ? HttpMethod.Get : HttpMethod.Post,new Uri(origin,path));
@@ -287,6 +285,12 @@ internal sealed class LocalWire : IRouterWire
         using var memory=new MemoryStream();var buffer=new byte[65536];int count;
         while((count=await input.ReadAsync(buffer,token))>0){if(memory.Length+count>8*1024*1024)throw new RouterException("Router response exceeded the display limit.");await memory.WriteAsync(buffer.AsMemory(0,count),token);}
         return ParseResponse(memory.ToArray(),path is "/loginAction" or WobaProtocol.Login,path is "/setData" or WobaProtocol.Set);
+    }
+    internal static bool Allows(string path,string? body,bool woba=false)
+    {
+        if(woba)return WobaProtocol.Allows(path,body);
+        if(body is not null)return path is "/loginAction" or "/setData";
+        return path.StartsWith("/getData?key=",StringComparison.Ordinal) && Catalog.ReadKeys.Contains(path[13..]) || SatelliteForwarding.IsReadPath(path);
     }
     internal static JsonObject ParseResponse(byte[] body,bool login=false,bool write=false)
     {
@@ -458,6 +462,87 @@ internal sealed partial class RouterClient : IDisposable
         try{await wire.SendAsync("/setData",body,token);}
         catch(Exception ex) when(ex is HttpRequestException or TaskCanceledException)
         {throw new RouterException("The request was sent, but its result is unknown. Refresh before trying again; it was not retried.");}
+    }
+
+    // ---- Satellites, through the main node's forwarding (see SatelliteForwarding) ----
+    internal async Task<JsonObject> ReadSatelliteAsync(SatelliteTarget target,string key,CancellationToken token=default)
+    {
+        var value=await wire.SendAsync(SatelliteForwarding.ReadPath(key,target.Address),null,token);
+        var echo=Catalog.Text(value["HNEIPADDRESS"]);
+        if(echo.Length>0 && echo!=target.Address)throw new RouterException("The main router answered for a different satellite address.");
+        return value;
+    }
+    /// <summary>Main router identity, then the serial the satellite itself reports through the main router.</summary>
+    public async Task VerifySatelliteAsync(SatelliteTarget target,CancellationToken token=default)
+    {
+        await ConnectAsync(token);await VerifyIdentityAsync(token);
+        var serial=Catalog.Text((await ReadSatelliteAsync(target,"DEVICE_INFO_ALL",token))["DEVICE_INFO"]?["SERIAL_KEY"]);
+        if(serial!=target.Serial)throw new RouterException(serial.Length==0
+            ? "The satellite at "+target.Address+" did not report its serial through the main router. Nothing was changed."
+            : "The satellite at "+target.Address+" reports a different serial than the mesh map. Refresh the mesh. Nothing was changed.");
+    }
+    public async Task<Snapshot> ReadSatellitePageAsync(SatelliteTarget target,CancellationToken token=default)
+    {
+        await ConnectAsync(token);
+        var page=new Page("satellite","Satellite · "+target.Name,"Information and the few settings a satellite controls. Network-wide settings stay on the main router.",SatelliteForwarding.ReadKeys);
+        var data=new Dictionary<string,JsonObject>();var reads=new List<ReadResult>();var rows=new List<FieldRow>();
+        foreach(var key in page.Keys)
+        {
+            Progress?.Invoke($"Reading {target.Name}: {reads.Count+1}/{page.Keys.Length} · {key}…");
+            try{var value=await ReadSatelliteAsync(target,key,token);data[key]=value;reads.Add(new(key,200,"OK",DateTimeOffset.Now,true));rows.AddRange(Catalog.Flatten(value,key));}
+            catch(RouterException ex){reads.Add(new(key,null,ex.Code.Length>0?ex.Code:ex.Message,DateTimeOffset.Now,false));if(ex.Code=="SessionTimeout"){authenticated=false;break;}}
+            catch(HttpRequestException ex){authenticated=false;reads.Add(new(key,null,RouterDiscovery.ConnectionFailure(ex,record.Address),DateTimeOffset.Now,false));break;}
+            catch(TaskCanceledException) when(!token.IsCancellationRequested){authenticated=false;reads.Add(new(key,null,"Timed out; remaining queries stopped",DateTimeOffset.Now,false));break;}
+        }
+        var serial=Catalog.Text(data.GetValueOrDefault("DEVICE_INFO_ALL")?["DEVICE_INFO"]?["SERIAL_KEY"]);
+        if(serial.Length>0 && serial!=target.Serial)throw new RouterException("The satellite at "+target.Address+" reports a different serial than the mesh map. Refresh the mesh.");
+        return new(page,data,reads,rows,DateTimeOffset.Now);
+    }
+    public async Task<PendingChange> PrepareSatelliteAsync(SatelliteTarget target,SettingSection section,Dictionary<string,string> edits,CancellationToken token=default)
+    {
+        await VerifySatelliteAsync(target,token);
+        var current=Settings.Locate(await ReadSatelliteAsync(target,section.Definition.Key,token),section.Container,section.Index,section.Identity);
+        if(!Settings.SameValues(current,section.Baseline))throw new RouterException("These satellite settings changed since the page was loaded. Refresh before saving.");
+        var plan=Settings.Prepare(section.Definition,section.Container,current,edits,"MODIFY",section.Index,section.Identity);
+        return plan with{Body=SatelliteForwarding.Forward(plan.Body,target.Address),Preview=target.Name+" ("+target.Serial+")\n"+plan.Preview};
+    }
+    public async Task<string> ApplySatelliteAsync(SatelliteTarget target,PendingChange plan,CancellationToken token=default)
+    {
+        Settings.ValidateEnvelope(plan.Body);
+        if(Catalog.Text((JsonNode.Parse(plan.Body) as JsonObject)?["REQUEST"]?["HNEIPADDRESS"])!=target.Address)throw new RouterException("This change was prepared for a different satellite.");
+        await VerifySatelliteAsync(target,token);
+        if(!Settings.SameValues(Settings.Locate(await ReadSatelliteAsync(target,plan.Definition.Key,token),plan.Container,plan.Index,plan.Identity),plan.Before))
+            throw new RouterException("Satellite settings changed after the preview. Refresh and review them again; no update was sent.");
+        try{await wire.SendAsync("/setData",plan.Body,token);}
+        catch(Exception ex) when(ex is HttpRequestException or TaskCanceledException)
+        {throw new RouterException("The save request was sent, but its result is unknown. Refresh the satellite; do not assume it failed.");}
+        try
+        {
+            var actual=Settings.Locate(await ReadSatelliteAsync(target,plan.Definition.Key,token),plan.Container,plan.Index,plan.Identity);
+            return Settings.VerifyValues(actual,plan.Expected) ? "Saved on the satellite and verified by reading it back." : "The main router accepted the request, but the satellite's values were not verified. Refresh before another change.";
+        }
+        catch(Exception ex) when(ex is RouterException or HttpRequestException or TaskCanceledException)
+        {return "The main router accepted the save, but satellite read-back failed. Refresh. No save was retried.";}
+    }
+    /// <summary>Plain restart only (SIMPLE_RESET). Sent once after identity checks; never retried.</summary>
+    public async Task RebootSatelliteAsync(SatelliteTarget target,CancellationToken token=default)
+    {
+        await VerifySatelliteAsync(target,token);
+        try{await wire.SendAsync("/setData",SatelliteForwarding.Reboot(target.Address),token);}
+        catch(Exception ex) when(ex is HttpRequestException or TaskCanceledException)
+        {throw new RouterException("The restart request was sent, but its result is unknown. Wait a few minutes and refresh the mesh; it was not retried.");}
+    }
+    /// <summary>EXPERIMENTAL: satellite DFS through its mesh agent, after a forwarded identity check.</summary>
+    public async Task<string> SetSatelliteDfsAsync(SatelliteTarget target,bool enable,IMeshAgentWire? testAgent=null,CancellationToken token=default)
+    {
+        await VerifySatelliteAsync(target,token);
+        using var agent=testAgent??new MeshAgentWire(target);
+        return await MeshAgent.SetDfsAsync(agent,target,enable,token);
+    }
+    public async Task<SatelliteRadio> ReadSatelliteRadioAsync(SatelliteTarget target,IMeshAgentWire? testAgent=null,CancellationToken token=default)
+    {
+        using var agent=testAgent??new MeshAgentWire(target);
+        return await MeshAgent.ReadRadioAsync(agent,target,token);
     }
     public void Dispose()=>wire.Dispose();
 }

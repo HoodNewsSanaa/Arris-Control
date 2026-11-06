@@ -1,11 +1,9 @@
-Android 0.4.7 puts naming where you use it.
+Android 0.4.8 adds satellite pages and an experimental satellite DFS control.
 
-On **Overview**, choose **Name this network**, or hold the displayed network name. Saving updates the Overview label and selected-router heading immediately. This is the same saved connection name shown under Your routers.
+On **Mesh and devices**, select a satellite and choose **Open selected satellite**. Its page is read through your main router and shows the satellite's model and firmware, its light ring and status light (editable), and **Restart satellite**. Network-wide settings such as DNS, DHCP, Wi-Fi names and bypass stay on the main router and aren't shown. Restart is a normal restart only; factory and Wi-Fi resets are refused.
 
-On **Mesh**, long-press an individual router in the diagram or its node-list button to name that node directly. A short tap still selects it for inspection. Dragging, scrolling cancellation and a second touch cancel the hold. The explicit Name selected node button remains available.
+Turning DFS off on the main router doesn't change satellites, in this app or the official one: the main router's firmware never passes that setting on. The satellite page's **DFS channels · experimental** card can read the satellite's 5 GHz radio and turn DFS on or off by talking directly to the satellite's internal mesh agent. This has not been tested on real hardware, and the satellite may refuse it. The app checks the satellite's serial twice, sends one request, reads it back and never retries.
 
-Names use the existing private, identity-based storage and are retained when updating from 0.4.6. Naming does not change Wi-Fi settings or credentials and does not trigger a management read or network scan. The previous backhaul-rate, DFS and band-steering fixes remain included.
+Every satellite change re-checks the main router's and the satellite's serials, previews the change, sends once and reads it back. Details: docs/satellites.md.
 
-This update uses the existing package and permanent signing key. Release checks cover shared regressions, Android compilation and launch, HTTPS/Keystore management and encrypted-login retention after an in-place update. Physical-phone validation of the new touch gestures is still needed.
-
-Normal local management and labels are not W30-specific, but W31 hardware has not been validated. WOBA credential setup and onboarding-completion writes remain restricted to the verified W30 firmware.
+Offline tests cover the forwarding allowlists, restart-only reset, identity checks, verified saves, the mesh-agent DFS request format, one-shot writes and read-back. The release workflow compiles and launches the Android app; satellite features still need checking on a real mesh.
